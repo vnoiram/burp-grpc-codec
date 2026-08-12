@@ -1,0 +1,8 @@
+target/
+.m2/
+.idea/
+.vscode/
+*.iml
+*.class
+.DS_Store
+ai-design/
