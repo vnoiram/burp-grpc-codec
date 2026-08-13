@@ -5,8 +5,7 @@ on:
     tags:
       - "v*.*.*"
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -17,6 +16,8 @@ jobs:
     name: Build and release
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -30,7 +31,7 @@ jobs:
           cache: maven
 
       - name: Test and package
-        run: mvn --batch-mode --no-transfer-progress package
+        run: mvn --batch-mode --no-transfer-progress verify package
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3

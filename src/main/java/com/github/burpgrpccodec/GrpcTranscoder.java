@@ -7,38 +7,73 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Optional;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
 final class GrpcTranscoder {
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(SerializationFeature.INDENT_OUTPUT);
-    private final ProtobufCodec protobuf = new ProtobufCodec();
+    private final ProtobufCodec protobuf;
+    private final SchemaRegistry schemas;
+    private final ExtensionSettings settings;
+
+    GrpcTranscoder() {
+        this(new SchemaRegistry(), null);
+    }
+
+    GrpcTranscoder(SchemaRegistry schemas, ExtensionSettings settings) {
+        this.schemas = schemas;
+        this.settings = settings;
+        this.protobuf = new ProtobufCodec(schemas);
+    }
 
     boolean isCandidate(byte[] body, HttpHeaders headers) {
         if (body.length == 0) {
             return false;
         }
-        if (headers.isGrpc() || headers.isGrpcWeb()) {
+        if (headers.isGrpc() || headers.isGrpcWeb() || headers.isProtobuf()) {
             return true;
+        }
+        ExtensionSettings.RawDetection mode = settings == null
+                ? ExtensionSettings.RawDetection.BROAD
+                : settings.rawDetection();
+        if (mode == ExtensionSettings.RawDetection.OFF) {
+            return false;
+        }
+        if (mode == ExtensionSettings.RawDetection.STRICT && !hasLikelyBinaryProtobufShape(body)) {
+            return false;
         }
         return protobuf.looksLikeProtobuf(body);
     }
 
     byte[] decode(byte[] body, HttpHeaders headers) {
         Envelope envelope = decodeEnvelope(body, headers);
+        Optional<SchemaMessage> schema = schemaFor(headers, envelope.format, "");
         ObjectNode root = JSON.createObjectNode();
         root.put("_format", envelope.format);
+        schema.ifPresent(message -> root.put("messageType", message.typeName()));
         ArrayNode messages = root.putArray("messages");
         for (GrpcMessage message : envelope.messages) {
             ObjectNode node = messages.addObject();
             node.put("compressed", message.compressed);
-            if (message.compressed) {
+            if (message.compression != null) {
+                node.put("compression", message.compression);
+            }
+            if (message.compressed && "gzip".equals(message.compression)) {
+                decodeGzipMessage(schema, message, node);
+            } else if (message.compressed) {
                 node.put("compressedBytes", Base64.getEncoder().encodeToString(message.payload));
             } else {
-                node.set("message", protobuf.decodeMessage(message.payload));
+                byte[] payload = message.payload;
+                node.set("message", schema.map(schemaMessage -> protobuf.decodeMessage(payload, schemaMessage))
+                        .orElseGet(() -> protobuf.decodeMessage(payload)));
             }
         }
         if (!envelope.trailers.isEmpty()) {
@@ -54,13 +89,13 @@ final class GrpcTranscoder {
         try {
             JsonNode root = JSON.readTree(jsonBytes);
             String format = root.path("_format").asText(detectFormat(headers));
+            Optional<SchemaMessage> schema = schemaFor(headers, format, root.path("messageType").asText(""));
             List<GrpcMessage> messages = new ArrayList<>();
             for (JsonNode item : root.withArray("messages")) {
                 boolean compressed = item.path("compressed").asBoolean(false);
-                byte[] payload = compressed
-                        ? Base64.getDecoder().decode(item.path("compressedBytes").asText(""))
-                        : protobuf.encodeMessage((ObjectNode) item.path("message"));
-                messages.add(new GrpcMessage(compressed, payload));
+                String compression = item.path("compression").asText(headers.isGzipEncoded() ? "gzip" : "");
+                byte[] payload = encodePayload(item, schema, compressed, compression);
+                messages.add(new GrpcMessage(compressed, payload, compression.isBlank() ? null : compression));
             }
             List<byte[]> trailers = new ArrayList<>();
             for (JsonNode item : root.withArray("trailers")) {
@@ -72,6 +107,35 @@ final class GrpcTranscoder {
         }
     }
 
+    void reloadSchemas() {
+        if (settings != null) {
+            settings.saveSnapshot();
+            schemas.reload(settings);
+        }
+    }
+
+    private void decodeGzipMessage(Optional<SchemaMessage> schema, GrpcMessage message, ObjectNode node) {
+        try {
+            byte[] decompressed = gunzip(message.payload);
+            node.set("message", schema.map(schemaMessage -> protobuf.decodeMessage(decompressed, schemaMessage))
+                    .orElseGet(() -> protobuf.decodeMessage(decompressed)));
+        } catch (RuntimeException ex) {
+            node.put("compressedBytes", Base64.getEncoder().encodeToString(message.payload));
+        }
+    }
+
+    private byte[] encodePayload(JsonNode item, Optional<SchemaMessage> schema, boolean compressed, String compression) {
+        if (compressed && item.has("compressedBytes")) {
+            return Base64.getDecoder().decode(item.path("compressedBytes").asText(""));
+        }
+        byte[] payload = schema.map(schemaMessage -> protobuf.encodeMessage((ObjectNode) item.path("message"), schemaMessage))
+                .orElseGet(() -> protobuf.encodeMessage((ObjectNode) item.path("message")));
+        if (compressed && "gzip".equals(compression)) {
+            return gzip(payload);
+        }
+        return payload;
+    }
+
     private Envelope decodeEnvelope(byte[] body, HttpHeaders headers) {
         String format = detectFormat(headers);
         byte[] transportBody = body;
@@ -79,7 +143,7 @@ final class GrpcTranscoder {
             transportBody = Base64.getMimeDecoder().decode(new String(body, StandardCharsets.US_ASCII));
         }
         if ("grpc".equals(format) || "grpc-web".equals(format) || "grpc-web-text".equals(format)) {
-            return decodeFrames(format, transportBody);
+            return decodeFrames(format, transportBody, headers);
         }
         return new Envelope("protobuf", List.of(new GrpcMessage(false, body)), List.of());
     }
@@ -97,7 +161,7 @@ final class GrpcTranscoder {
         return "protobuf";
     }
 
-    private Envelope decodeFrames(String format, byte[] body) {
+    private Envelope decodeFrames(String format, byte[] body, HttpHeaders headers) {
         List<GrpcMessage> messages = new ArrayList<>();
         List<byte[]> trailers = new ArrayList<>();
         int offset = 0;
@@ -116,7 +180,8 @@ final class GrpcTranscoder {
             System.arraycopy(body, offset, payload, 0, length);
             offset += length;
             if (!trailerFrame) {
-                messages.add(new GrpcMessage((flags & 0x01) != 0, payload));
+                boolean compressed = (flags & 0x01) != 0;
+                messages.add(new GrpcMessage(compressed, payload, compressed && headers.isGzipEncoded() ? "gzip" : null));
             } else {
                 trailers.add(payload);
             }
@@ -170,6 +235,41 @@ final class GrpcTranscoder {
         out[offset + 4] = (byte) length;
     }
 
+    private Optional<SchemaMessage> schemaFor(HttpHeaders headers, String format, String explicitType) {
+        if (!explicitType.isBlank()) {
+            return schemas.message(explicitType);
+        }
+        if (settings == null) {
+            return Optional.empty();
+        }
+        String type = "protobuf".equals(format) || headers.isGrpc()
+                ? settings.defaultRequestType()
+                : settings.defaultResponseType();
+        return schemas.message(type);
+    }
+
+    private static boolean hasLikelyBinaryProtobufShape(byte[] body) {
+        return body.length >= 2 && (body[0] & 0x07) <= 5 && ((body[0] >>> 3) > 0);
+    }
+
+    private static byte[] gunzip(byte[] bytes) {
+        try (GZIPInputStream in = new GZIPInputStream(new ByteArrayInputStream(bytes))) {
+            return in.readAllBytes();
+        } catch (java.io.IOException ex) {
+            throw new IllegalArgumentException("Cannot decompress gzip message", ex);
+        }
+    }
+
+    private static byte[] gzip(byte[] bytes) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (GZIPOutputStream gzip = new GZIPOutputStream(out)) {
+            gzip.write(bytes);
+        } catch (java.io.IOException ex) {
+            throw new IllegalArgumentException("Cannot compress gzip message", ex);
+        }
+        return out.toByteArray();
+    }
+
     private static byte[] toPrettyBytes(JsonNode node) {
         try {
             return JSON.writeValueAsBytes(node);
@@ -181,6 +281,9 @@ final class GrpcTranscoder {
     private record Envelope(String format, List<GrpcMessage> messages, List<byte[]> trailers) {
     }
 
-    private record GrpcMessage(boolean compressed, byte[] payload) {
+    private record GrpcMessage(boolean compressed, byte[] payload, String compression) {
+        private GrpcMessage(boolean compressed, byte[] payload) {
+            this(compressed, payload, null);
+        }
     }
 }

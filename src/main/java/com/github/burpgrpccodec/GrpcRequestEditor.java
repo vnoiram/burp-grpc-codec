@@ -13,36 +13,51 @@ import java.nio.charset.StandardCharsets;
 
 final class GrpcRequestEditor implements ExtensionProvidedHttpRequestEditor {
     private final RawEditor editor;
-    private final GrpcTranscoder transcoder = new GrpcTranscoder();
+    private final MontoyaApi api;
+    private final GrpcTranscoder transcoder;
     private HttpRequestResponse current;
+    private boolean decoded;
 
-    GrpcRequestEditor(MontoyaApi api) {
+    GrpcRequestEditor(MontoyaApi api, GrpcTranscoder transcoder) {
+        this.api = api;
+        this.transcoder = transcoder;
         this.editor = api.userInterface().createRawEditor();
         this.editor.setEditable(true);
     }
 
     @Override
     public HttpRequest getRequest() {
-        if (current == null || !editor.isModified()) {
+        if (current == null || !decoded || !editor.isModified()) {
             return current == null ? null : current.request();
         }
-        byte[] edited = editor.getContents().getBytes();
-        byte[] body = transcoder.encode(edited, HttpHeaders.from(current.request()));
-        return current.request().withBody(ByteArray.byteArray(body));
+        try {
+            byte[] edited = editor.getContents().getBytes();
+            byte[] body = transcoder.encode(edited, HttpHeaders.from(current.request()));
+            return current.request().withBody(ByteArray.byteArray(body));
+        } catch (RuntimeException ex) {
+            api.logging().logToError("gRPC Codec request encode error: " + ex.getMessage());
+            return current.request();
+        }
     }
 
     @Override
     public void setRequestResponse(HttpRequestResponse requestResponse) {
         this.current = requestResponse;
+        this.decoded = false;
         if (requestResponse == null || requestResponse.request() == null) {
             editor.setContents(ByteArray.byteArray(new byte[0]));
+            editor.setEditable(false);
             return;
         }
         try {
+            transcoder.reloadSchemas();
             byte[] decoded = transcoder.decode(requestResponse.request().body().getBytes(), HttpHeaders.from(requestResponse.request()));
             editor.setContents(ByteArray.byteArray(decoded));
+            editor.setEditable(true);
+            this.decoded = true;
         } catch (RuntimeException ex) {
             editor.setContents(ByteArray.byteArray(("Decode error: " + ex.getMessage()).getBytes(StandardCharsets.UTF_8)));
+            editor.setEditable(false);
         }
     }
 

@@ -7,10 +7,14 @@ public final class BurpGrpcCodecExtension implements BurpExtension {
     @Override
     public void initialize(MontoyaApi api) {
         api.extension().setName("Burp gRPC Codec");
+        ExtensionSettings settings = new ExtensionSettings(api.persistence().extensionData());
+        SchemaRegistry schemas = new SchemaRegistry();
+        GrpcTranscoder transcoder = new GrpcTranscoder(schemas, settings);
+        api.userInterface().registerSettingsPanel(settings.panel());
         api.userInterface().registerHttpRequestEditorProvider(
-                context -> new GrpcRequestEditor(api));
+                context -> new GrpcRequestEditor(api, transcoder));
         api.userInterface().registerHttpResponseEditorProvider(
-                context -> new GrpcResponseEditor(api));
+                context -> new GrpcResponseEditor(api, transcoder));
         api.logging().logToOutput("Burp gRPC Codec loaded");
     }
 }

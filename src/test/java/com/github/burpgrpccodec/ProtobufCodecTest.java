@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 
 import java.util.Base64;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -77,5 +78,82 @@ class ProtobufCodecTest {
 
         assertEquals("edited", decoded.get("f1").get("value").asText());
         assertEquals(321, decoded.get("f2").get("value").asInt());
+    }
+
+    @Test
+    void addsSchemaMetadataWithoutChangingWireFormat() {
+        SchemaMessage schema = new SchemaMessage("demo.Hello",
+                Map.of(1, new SchemaField(1, "greeting", "string", "", "", false, false)),
+                Map.of());
+        byte[] protobuf = new byte[] {0x0a, 0x02, 'o', 'k'};
+
+        ProtobufCodec codec = new ProtobufCodec();
+        ObjectNode decoded = codec.decodeMessage(protobuf, schema);
+
+        assertEquals("greeting", decoded.get("f1").get("name").asText());
+        assertEquals("string", decoded.get("f1").get("protoType").asText());
+        assertArrayEquals(protobuf, codec.encodeMessage(decoded, schema));
+    }
+
+    @Test
+    void loadsSchemaMetadataFromProtoSource() {
+        SchemaRegistry registry = new SchemaRegistry();
+        registry.addProtoSource("""
+                syntax = "proto3";
+                package demo;
+                message Hello {
+                  string greeting = 1;
+                }
+                """);
+
+        SchemaMessage schema = registry.message("demo.Hello").orElseThrow();
+        ObjectNode decoded = new ProtobufCodec().decodeMessage(new byte[] {0x0a, 0x02, 'o', 'k'}, schema);
+
+        assertEquals("greeting", decoded.get("f1").get("name").asText());
+    }
+
+    @Test
+    void treatsProtoMessageFieldsAsMessageTypes() {
+        SchemaRegistry registry = new SchemaRegistry();
+        registry.addProtoSource("""
+                syntax = "proto3";
+                package demo;
+                message Child {
+                  string name = 1;
+                }
+                message Parent {
+                  Child child = 1;
+                }
+                """);
+
+        SchemaField field = registry.message("demo.Parent").orElseThrow().field(1);
+
+        assertEquals("demo.Child", field.messageType());
+    }
+
+    @Test
+    void usesSchemaMetadataForNestedMessages() {
+        SchemaRegistry registry = new SchemaRegistry();
+        registry.addProtoSource("""
+                syntax = "proto3";
+                package demo;
+                message Child {
+                  string name = 1;
+                }
+                message Parent {
+                  Child child = 1;
+                }
+                """);
+        byte[] protobuf = new byte[] {
+                0x0a, 0x04,
+                0x0a, 0x02, 'o', 'k'
+        };
+
+        ObjectNode decoded = new ProtobufCodec(registry)
+                .decodeMessage(protobuf, registry.message("demo.Parent").orElseThrow());
+
+        JsonNode child = decoded.get("f1").get("value").get("f1");
+        assertEquals("name", child.get("name").asText());
+        assertEquals("ok", child.get("value").asText());
     }
 }

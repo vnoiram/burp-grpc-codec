@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.zip.GZIPOutputStream;
+import java.io.ByteArrayOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -73,5 +75,31 @@ class GrpcTranscoderTest {
 
         assertEquals(1, JSON.readTree(json).get("trailers").size());
         assertArrayEquals(body, transcoder.encode(json, new HttpHeaders("application/grpc-web")));
+    }
+
+    @Test
+    void decodesAndEncodesGzipCompressedGrpcMessage() throws Exception {
+        byte[] protobuf = new byte[] {0x0a, 0x02, 'o', 'k'};
+        byte[] compressed = gzip(protobuf);
+        byte[] body = new byte[5 + compressed.length];
+        body[0] = 1;
+        body[4] = (byte) compressed.length;
+        System.arraycopy(compressed, 0, body, 5, compressed.length);
+
+        GrpcTranscoder transcoder = new GrpcTranscoder();
+        byte[] json = transcoder.decode(body, new HttpHeaders("application/grpc", "gzip"));
+
+        JsonNode root = JSON.readTree(json);
+        assertEquals("gzip", root.get("messages").get(0).get("compression").asText());
+        assertEquals("ok", root.get("messages").get(0).get("message").get("f1").get("value").asText());
+        assertArrayEquals(body, transcoder.encode(json, new HttpHeaders("application/grpc", "gzip")));
+    }
+
+    private static byte[] gzip(byte[] bytes) throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try (GZIPOutputStream gzip = new GZIPOutputStream(out)) {
+            gzip.write(bytes);
+        }
+        return out.toByteArray();
     }
 }
