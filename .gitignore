@@ -6,3 +6,4 @@ target/
 *.class
 .DS_Store
 ai-design/
+.pre-push-check-ignore.md
