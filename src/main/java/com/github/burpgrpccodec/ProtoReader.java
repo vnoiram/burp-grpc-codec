@@ -57,7 +57,7 @@ final class ProtoReader {
     }
 
     private void ensure(int count) {
-        if (count < 0 || offset + count > bytes.length) {
+        if (count < 0 || count > bytes.length - offset) {
             throw new IllegalArgumentException("truncated protobuf payload");
         }
     }

@@ -9,6 +9,7 @@ import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProtobufCodecTest {
@@ -41,6 +42,16 @@ class ProtobufCodecTest {
 
         assertEquals("bytes", decoded.get("f1").get("type").asText());
         assertEquals(Base64.getEncoder().encodeToString(new byte[] {0, 1, 2}), decoded.get("f1").get("value").asText());
+    }
+
+    @Test
+    void rejectsTruncatedLengthDelimitedFieldWithLargeDeclaredLength() {
+        byte[] protobuf = new byte[] {
+                0x0a,
+                (byte) 0xff, (byte) 0xff, (byte) 0xff, (byte) 0xff, 0x07
+        };
+
+        assertThrows(IllegalArgumentException.class, () -> new ProtobufCodec().decodeMessage(protobuf));
     }
 
     @Test

@@ -10,6 +10,7 @@ import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GrpcTranscoderTest {
@@ -45,6 +46,17 @@ class GrpcTranscoderTest {
 
         assertTrue(Arrays.equals(body, encoded));
         assertEquals(new String(body, StandardCharsets.US_ASCII), new String(encoded, StandardCharsets.US_ASCII));
+    }
+
+    @Test
+    void rejectsTruncatedGrpcFrameWithLargeDeclaredLength() {
+        byte[] body = new byte[] {
+                0,
+                0x7f, (byte) 0xff, (byte) 0xff, (byte) 0xff
+        };
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new GrpcTranscoder().decode(body, new HttpHeaders("application/grpc")));
     }
 
     @Test

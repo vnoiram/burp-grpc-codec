@@ -109,7 +109,7 @@ final class GrpcTranscoder {
                     | ((body[offset + 3] & 0xff) << 8)
                     | (body[offset + 4] & 0xff);
             offset += 5;
-            if (length < 0 || offset + length > body.length) {
+            if (length < 0 || length > body.length - offset) {
                 throw new IllegalArgumentException("Invalid gRPC frame length");
             }
             byte[] payload = new byte[length];
