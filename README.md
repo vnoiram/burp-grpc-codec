@@ -22,6 +22,10 @@ back into the original wire format when Burp sends the message.
 - Decodes protobuf without `.proto` files using wire-format inference.
 - Adds schema metadata such as field names and proto types while keeping the
   editable `f<number>` JSON format.
+- Selects request and response message types from gRPC service/method paths
+  when service definitions are available.
+- Decodes and re-encodes packed repeated scalar fields when schema metadata is
+  available.
 - Decompresses and recompresses gzip-compressed gRPC messages when
   `grpc-encoding: gzip` is present.
 - Preserves repeated fields and unknown numeric field numbers.

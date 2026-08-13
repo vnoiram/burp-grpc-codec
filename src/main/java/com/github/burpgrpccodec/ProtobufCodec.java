@@ -60,6 +60,10 @@ final class ProtobufCodec {
             int fieldNumber = parseFieldName(field.getKey());
             SchemaField schemaField = schema == null ? null : schema.field(fieldNumber);
             JsonNode value = field.getValue();
+            if (schemaField != null && schemaField.packed() && value.isArray()) {
+                writePackedField(out, fieldNumber, value, schemaField);
+                continue;
+            }
             if (value.isArray()) {
                 for (JsonNode item : value) {
                     writeField(out, fieldNumber, item, schemaField);
@@ -85,7 +89,7 @@ final class ProtobufCodec {
                 throw new IllegalArgumentException("invalid protobuf field number");
             }
             SchemaField schemaField = schema.map(message -> message.field(fieldNumber)).orElse(null);
-            ObjectNode field = switch (wireType) {
+            JsonNode field = switch (wireType) {
                 case 0 -> decodeVarint(reader.readVarint(), schemaField);
                 case 1 -> decodeFixed64(reader.readFixed64(), schemaField);
                 case 2 -> decodeLengthDelimited(reader.readBytes(), schemaField, depth + 1);
@@ -132,7 +136,7 @@ final class ProtobufCodec {
         };
     }
 
-    private ObjectNode decodeLengthDelimited(byte[] value, SchemaField schemaField, int depth) {
+    private JsonNode decodeLengthDelimited(byte[] value, SchemaField schemaField, int depth) {
         if (schemaField != null) {
             switch (schemaField.protoType()) {
                 case "string" -> {
@@ -142,6 +146,9 @@ final class ProtobufCodec {
                     return typed("bytes").put("value", Base64.getEncoder().encodeToString(value));
                 }
                 default -> {
+                    if (schemaField.repeated() && schemaField.packed()) {
+                        return decodePacked(value, schemaField);
+                    }
                     if (!schemaField.messageType().isBlank()) {
                         ObjectNode node = typed("message");
                         node.put("messageType", schemaField.messageType());
@@ -166,6 +173,26 @@ final class ProtobufCodec {
             }
         }
         return typed("bytes").put("value", Base64.getEncoder().encodeToString(value));
+    }
+
+    private ArrayNode decodePacked(byte[] value, SchemaField schemaField) {
+        ProtoReader reader = new ProtoReader(value);
+        ArrayNode items = NODES.arrayNode();
+        while (!reader.exhausted()) {
+            ObjectNode item = switch (schemaField.protoType()) {
+                case "double" -> decodeFixed64(reader.readFixed64(), schemaField);
+                case "float" -> decodeFixed32(reader.readFixed32(), schemaField);
+                case "fixed32", "sfixed32" -> decodeFixed32(reader.readFixed32(), schemaField);
+                case "fixed64", "sfixed64" -> decodeFixed64(reader.readFixed64(), schemaField);
+                case "bool", "sint32", "sint64", "int32", "uint32", "int64", "uint64", "enum" ->
+                        decodeVarint(reader.readVarint(), schemaField);
+                default -> throw new IllegalArgumentException("unsupported packed field type: " + schemaField.protoType());
+            };
+            applyMetadata(item, schemaField);
+            item.put("packed", true);
+            items.add(item);
+        }
+        return items;
     }
 
     private void writeField(ByteArrayOutputStream out, int fieldNumber, JsonNode field, SchemaField schemaField) {
@@ -207,24 +234,49 @@ final class ProtobufCodec {
         }
     }
 
+    private void writePackedField(ByteArrayOutputStream out, int fieldNumber, JsonNode values, SchemaField schemaField) {
+        ByteArrayOutputStream packed = new ByteArrayOutputStream();
+        for (JsonNode item : values) {
+            writePackedValue(packed, item, schemaField);
+        }
+        writeLengthDelimited(out, fieldNumber, packed.toByteArray());
+    }
+
+    private void writePackedValue(ByteArrayOutputStream out, JsonNode field, SchemaField schemaField) {
+        String type = field.path("type").asText(defaultType(schemaField));
+        JsonNode value = field.path("value");
+        switch (type) {
+            case "varint", "int32", "int64", "uint32", "uint64", "enum" -> writeVarint(out, value.asLong());
+            case "bool" -> writeVarint(out, value.asBoolean() ? 1 : 0);
+            case "sint32", "sint64" -> writeVarint(out, encodeZigZag(value.asLong()));
+            case "fixed64", "sfixed64" -> writeLittleEndian64(out, value.asLong());
+            case "double" -> writeLittleEndian64(out, Double.doubleToRawLongBits(value.asDouble()));
+            case "fixed32", "sfixed32" -> writeLittleEndian32(out, value.asLong());
+            case "float" -> writeLittleEndian32(out, Float.floatToRawIntBits((float) value.asDouble()));
+            default -> throw new IllegalArgumentException("unsupported packed field type: " + type);
+        }
+    }
+
     private static ObjectNode typed(String type) {
         ObjectNode node = NODES.objectNode();
         node.put("type", type);
         return node;
     }
 
-    private static void applyMetadata(ObjectNode field, SchemaField schemaField) {
-        if (schemaField == null) {
+    private static void applyMetadata(JsonNode field, SchemaField schemaField) {
+        if (schemaField == null || !field.isObject()) {
             return;
         }
-        field.put("name", schemaField.name());
-        field.put("protoType", schemaField.protoType());
-        field.put("repeated", schemaField.repeated());
+        ObjectNode object = (ObjectNode) field;
+        object.put("name", schemaField.name());
+        object.put("protoType", schemaField.protoType());
+        object.put("repeated", schemaField.repeated());
+        object.put("packed", schemaField.packed());
         if (!schemaField.messageType().isBlank()) {
-            field.put("messageType", schemaField.messageType());
+            object.put("messageType", schemaField.messageType());
         }
         if (!schemaField.enumType().isBlank()) {
-            field.put("enumType", schemaField.enumType());
+            object.put("enumType", schemaField.enumType());
         }
     }
 
@@ -232,7 +284,7 @@ final class ProtobufCodec {
         return schemaField == null ? "" : schemaField.protoType();
     }
 
-    private static void appendField(ObjectNode object, String name, ObjectNode value) {
+    private static void appendField(ObjectNode object, String name, JsonNode value) {
         JsonNode existing = object.get(name);
         if (existing == null) {
             object.set(name, value);

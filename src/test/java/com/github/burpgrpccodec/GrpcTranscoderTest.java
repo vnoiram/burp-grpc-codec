@@ -95,6 +95,41 @@ class GrpcTranscoderTest {
         assertArrayEquals(body, transcoder.encode(json, new HttpHeaders("application/grpc", "gzip")));
     }
 
+    @Test
+    void mapsGrpcPathToRequestAndResponseMessageTypes() throws Exception {
+        SchemaRegistry registry = new SchemaRegistry();
+        registry.addProtoSource("""
+                syntax = "proto3";
+                package demo;
+                service Greeter {
+                  rpc SayHello (HelloRequest) returns (HelloResponse);
+                }
+                message HelloRequest {
+                  string request_name = 1;
+                }
+                message HelloResponse {
+                  string response_name = 1;
+                }
+                """);
+        GrpcTranscoder transcoder = new GrpcTranscoder(registry, null);
+        byte[] body = new byte[] {
+                0, 0, 0, 0, 4,
+                0x0a, 0x02, 'o', 'k'
+        };
+
+        JsonNode request = JSON.readTree(transcoder.decode(
+                body,
+                new HttpHeaders("application/grpc", "", "/demo.Greeter/SayHello", false)));
+        JsonNode response = JSON.readTree(transcoder.decode(
+                body,
+                new HttpHeaders("application/grpc", "", "/demo.Greeter/SayHello", true)));
+
+        assertEquals("demo.HelloRequest", request.get("messageType").asText());
+        assertEquals("request_name", request.get("messages").get(0).get("message").get("f1").get("name").asText());
+        assertEquals("demo.HelloResponse", response.get("messageType").asText());
+        assertEquals("response_name", response.get("messages").get(0).get("message").get("f1").get("name").asText());
+    }
+
     private static byte[] gzip(byte[] bytes) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (GZIPOutputStream gzip = new GZIPOutputStream(out)) {

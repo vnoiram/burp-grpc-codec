@@ -32,7 +32,7 @@ final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
         }
         try {
             byte[] edited = editor.getContents().getBytes();
-            byte[] body = transcoder.encode(edited, HttpHeaders.from(current.response()));
+            byte[] body = transcoder.encode(edited, HttpHeaders.from(current.response(), current.request()));
             return current.response().withBody(ByteArray.byteArray(body));
         } catch (RuntimeException ex) {
             api.logging().logToError("gRPC Codec response encode error: " + ex.getMessage());
@@ -51,7 +51,9 @@ final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
         }
         try {
             transcoder.reloadSchemas();
-            byte[] decoded = transcoder.decode(requestResponse.response().body().getBytes(), HttpHeaders.from(requestResponse.response()));
+            byte[] decoded = transcoder.decode(
+                    requestResponse.response().body().getBytes(),
+                    HttpHeaders.from(requestResponse.response(), requestResponse.request()));
             editor.setContents(ByteArray.byteArray(decoded));
             editor.setEditable(true);
             this.decoded = true;
@@ -65,7 +67,9 @@ final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
     public boolean isEnabledFor(HttpRequestResponse requestResponse) {
         return requestResponse != null
                 && requestResponse.response() != null
-                && transcoder.isCandidate(requestResponse.response().body().getBytes(), HttpHeaders.from(requestResponse.response()));
+                && transcoder.isCandidate(
+                        requestResponse.response().body().getBytes(),
+                        HttpHeaders.from(requestResponse.response(), requestResponse.request()));
     }
 
     @Override

@@ -156,4 +156,31 @@ class ProtobufCodecTest {
         assertEquals("name", child.get("name").asText());
         assertEquals("ok", child.get("value").asText());
     }
+
+    @Test
+    void decodesAndEncodesPackedRepeatedScalars() {
+        SchemaRegistry registry = new SchemaRegistry();
+        registry.addProtoSource("""
+                syntax = "proto3";
+                package demo;
+                message Numbers {
+                  repeated int32 values = 1 [packed = true];
+                }
+                """);
+        byte[] protobuf = new byte[] {
+                0x0a, 0x02, 0x01, 0x02
+        };
+
+        SchemaMessage schema = registry.message("demo.Numbers").orElseThrow();
+        ProtobufCodec codec = new ProtobufCodec(registry);
+        ObjectNode decoded = codec.decodeMessage(protobuf, schema);
+        JsonNode values = decoded.get("f1");
+
+        assertTrue(values.isArray());
+        assertEquals(2, values.size());
+        assertEquals(1, values.get(0).get("value").asInt());
+        assertEquals(2, values.get(1).get("value").asInt());
+        assertEquals(true, values.get(0).get("packed").asBoolean());
+        assertArrayEquals(protobuf, codec.encodeMessage(decoded, schema));
+    }
 }

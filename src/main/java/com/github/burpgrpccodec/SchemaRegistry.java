@@ -22,6 +22,7 @@ import java.util.stream.Stream;
 
 final class SchemaRegistry {
     private final Map<String, SchemaMessage> messages = new HashMap<>();
+    private final Map<String, SchemaMethod> methods = new HashMap<>();
 
     Optional<SchemaMessage> message(String typeName) {
         String normalized = normalizeType(typeName);
@@ -31,8 +32,21 @@ final class SchemaRegistry {
         return Optional.ofNullable(messages.get(normalized));
     }
 
+    Optional<SchemaMessage> messageForPath(String path, boolean response) {
+        String normalized = normalizePath(path);
+        if (normalized.isEmpty()) {
+            return Optional.empty();
+        }
+        SchemaMethod method = methods.get(normalized);
+        if (method == null) {
+            return Optional.empty();
+        }
+        return message(response ? method.responseType() : method.requestType());
+    }
+
     void reload(ExtensionSettings settings) {
         messages.clear();
+        methods.clear();
         loadProtoPaths(settings.protoPaths());
         String target = settings.reflectionTarget();
         if (!target.isBlank()) {
@@ -47,6 +61,9 @@ final class SchemaRegistry {
         ProtoFile parsed = ProtoFile.parse(source);
         for (ProtoMessage message : parsed.messages) {
             addMessage(parsed.packageName, parsed.enums, message);
+        }
+        for (ProtoService service : parsed.services) {
+            addService(parsed.packageName, service);
         }
     }
 
@@ -119,6 +136,9 @@ final class SchemaRegistry {
         for (Descriptors.Descriptor descriptor : file.getMessageTypes()) {
             addDescriptorMessage(descriptor);
         }
+        for (Descriptors.ServiceDescriptor service : file.getServices()) {
+            addDescriptorService(service);
+        }
     }
 
     private void addDescriptorMessage(Descriptors.Descriptor descriptor) {
@@ -149,6 +169,13 @@ final class SchemaRegistry {
         }
     }
 
+    private void addDescriptorService(Descriptors.ServiceDescriptor service) {
+        for (Descriptors.MethodDescriptor method : service.getMethods()) {
+            String path = "/" + service.getFullName() + "/" + method.getName();
+            methods.put(path, new SchemaMethod(path, method.getInputType().getFullName(), method.getOutputType().getFullName()));
+        }
+    }
+
     private void addMessage(String packageName, Set<String> enumNames, ProtoMessage protoMessage) {
         String typeName = packageName.isBlank() ? protoMessage.name : packageName + "." + protoMessage.name;
         Map<Integer, SchemaField> byNumber = new LinkedHashMap<>();
@@ -171,6 +198,16 @@ final class SchemaRegistry {
         messages.put(typeName, new SchemaMessage(typeName, Map.copyOf(byNumber), Map.copyOf(byName)));
     }
 
+    private void addService(String packageName, ProtoService protoService) {
+        String serviceName = packageName.isBlank() ? protoService.name : packageName + "." + protoService.name;
+        for (ProtoRpc rpc : protoService.rpcs) {
+            String requestType = normalizeProtoType(packageName, rpc.requestType);
+            String responseType = normalizeProtoType(packageName, rpc.responseType);
+            String path = "/" + serviceName + "/" + rpc.name;
+            methods.put(path, new SchemaMethod(path, requestType, responseType));
+        }
+    }
+
     private static String normalizeProtoType(String packageName, String type) {
         if (type.startsWith(".")) {
             return type.substring(1);
@@ -186,6 +223,15 @@ final class SchemaRegistry {
         return value.startsWith(".") ? value.substring(1) : value;
     }
 
+    private static String normalizePath(String path) {
+        if (path == null || path.isBlank()) {
+            return "";
+        }
+        int query = path.indexOf('?');
+        String withoutQuery = query >= 0 ? path.substring(0, query) : path;
+        return withoutQuery.startsWith("/") ? withoutQuery : "/" + withoutQuery;
+    }
+
     private static boolean isScalar(String type) {
         return switch (type) {
             case "double", "float", "int32", "int64", "uint32", "uint64", "sint32", "sint64",
@@ -194,14 +240,14 @@ final class SchemaRegistry {
         };
     }
 
-    private record ProtoFile(String packageName, Set<String> enums, List<ProtoMessage> messages) {
+    private record ProtoFile(String packageName, Set<String> enums, List<ProtoMessage> messages, List<ProtoService> services) {
         private static final Pattern PACKAGE = Pattern.compile("\\bpackage\\s+([A-Za-z_][A-Za-z0-9_.]*)\\s*;");
 
         static ProtoFile parse(String source) {
             String stripped = stripComments(source);
             Matcher packageMatcher = PACKAGE.matcher(stripped);
             String packageName = packageMatcher.find() ? packageMatcher.group(1) : "";
-            return new ProtoFile(packageName, parseEnums(packageName, stripped), parseMessages(stripped));
+            return new ProtoFile(packageName, parseEnums(packageName, stripped), parseMessages(stripped), parseServices(stripped));
         }
 
         private static Set<String> parseEnums(String packageName, String source) {
@@ -228,6 +274,30 @@ final class SchemaRegistry {
                 }
             }
             return messages;
+        }
+
+        private static List<ProtoService> parseServices(String source) {
+            List<ProtoService> services = new ArrayList<>();
+            Matcher matcher = Pattern.compile("\\bservice\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{").matcher(source);
+            while (matcher.find()) {
+                int bodyStart = matcher.end();
+                int bodyEnd = findBlockEnd(source, bodyStart - 1);
+                if (bodyEnd > bodyStart) {
+                    services.add(new ProtoService(matcher.group(1), parseRpcs(source.substring(bodyStart, bodyEnd))));
+                }
+            }
+            return services;
+        }
+
+        private static List<ProtoRpc> parseRpcs(String body) {
+            List<ProtoRpc> rpcs = new ArrayList<>();
+            Pattern rpcPattern = Pattern.compile(
+                    "\\brpc\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s*\\)\\s*returns\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s*\\)");
+            Matcher matcher = rpcPattern.matcher(body);
+            while (matcher.find()) {
+                rpcs.add(new ProtoRpc(matcher.group(1), matcher.group(2), matcher.group(3)));
+            }
+            return rpcs;
         }
 
         private static List<ProtoField> parseFields(String body) {
@@ -268,5 +338,11 @@ final class SchemaRegistry {
     }
 
     private record ProtoField(String name, String type, int number, boolean repeated, boolean packed) {
+    }
+
+    private record ProtoService(String name, List<ProtoRpc> rpcs) {
+    }
+
+    private record ProtoRpc(String name, String requestType, String responseType) {
     }
 }

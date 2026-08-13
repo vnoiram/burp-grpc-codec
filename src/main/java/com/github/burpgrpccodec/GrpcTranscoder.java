@@ -239,6 +239,10 @@ final class GrpcTranscoder {
         if (!explicitType.isBlank()) {
             return schemas.message(explicitType);
         }
+        Optional<SchemaMessage> pathMapped = schemas.messageForPath(headers.grpcPath(), headers.response());
+        if (pathMapped.isPresent()) {
+            return pathMapped;
+        }
         if (settings == null) {
             return Optional.empty();
         }
