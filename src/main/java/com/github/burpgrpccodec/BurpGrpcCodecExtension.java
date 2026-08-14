@@ -15,6 +15,8 @@ public final class BurpGrpcCodecExtension implements BurpExtension {
                 context -> new GrpcRequestEditor(api, transcoder));
         api.userInterface().registerHttpResponseEditorProvider(
                 context -> new GrpcResponseEditor(api, transcoder));
+        api.userInterface().registerContextMenuItemsProvider(new GrpcContextMenuProvider(api, transcoder));
+        api.http().registerHttpHandler(new GrpcHighlightHandler(transcoder, settings));
         api.logging().logToOutput("Burp gRPC Codec loaded");
     }
 }
