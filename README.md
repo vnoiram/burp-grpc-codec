@@ -17,8 +17,9 @@ back into the original wire format when Burp sends the message.
   transport encoding.
 - Falls back to raw protobuf parsing for HTTP bodies that look like protobuf.
 - Configures raw protobuf detection as broad, strict, or disabled.
-- Loads optional schema metadata from local `.proto` files or gRPC Server
-  Reflection.
+- Loads optional schema metadata from local `.proto` files, compiled binary
+  `FileDescriptorSet` files (`.protoset`/`.pb`/`.desc`/`.bin`, e.g. from
+  `protoc --descriptor_set_out`), or gRPC Server Reflection.
 - Decodes protobuf without `.proto` files using wire-format inference.
 - Adds schema metadata such as field names and proto types while keeping the
   editable `f<number>` JSON format.
@@ -48,12 +49,21 @@ back into the original wire format when Burp sends the message.
   decoded JSON to the extension output for the selected message(s), without
   needing to open the editor tab.
 - Adds a "Copy decoded gRPC/protobuf body to clipboard" context menu item.
+- Adds a "Send decoded gRPC/protobuf bodies to Comparer" context menu item,
+  useful for diffing two decoded messages.
 - Optionally highlights and annotates Proxy history responses detected as
   gRPC/protobuf (off by default; see Settings).
 - Surfaces `grpc-status` / `grpc-message` headers (common on grpc-web
   trailers-only responses) as read-only `grpcStatus` / `grpcStatusName` /
   `grpcMessage` fields in the decoded JSON, with standard gRPC status codes
   mapped to their name.
+- Passively records observed gRPC service/method paths (host + `/pkg.Service/
+  Method`) from declared gRPC/grpc-web requests, with a "gRPC Methods" suite
+  tab listing them for recon, independent of Server Reflection.
+- Accepts URL-safe and/or unpadded base64 in addition to standard base64 when
+  decoding `grpc-web-text` bodies.
+- Skips the schema-less raw-detection heuristic for bodies larger than a
+  configurable size (default 1 MiB), to bound its cost on large responses.
 
 ## Build
 
@@ -74,7 +84,9 @@ Load `target/burp-grpc-codec-0.2.0-SNAPSHOT-burp.jar` in Burp Suite under
 
 Open Burp's settings and search for `Burp gRPC Codec` to configure:
 
-- Local `.proto` files or directories, separated by commas.
+- Local `.proto` files or directories, separated by commas. Directories are
+  scanned for `.proto` files as well as binary `FileDescriptorSet` files
+  (`.protoset`/`.pb`/`.desc`/`.bin`), both loaded the same way.
 - A gRPC Server Reflection target as `host:port`, with optional TLS.
 - gRPC Server Reflection request timeout, in seconds (default `5`).
 - Default request and response message types for schema-aware decoding.
@@ -94,6 +106,9 @@ Open Burp's settings and search for `Burp gRPC Codec` to configure:
   technique other Burp extensions (e.g. Paramalyzer) use. It depends on
   Burp's internal UI structure and could stop working in a future Burp
   release; failures are silently ignored rather than breaking decoding.
+- Maximum body size for the schema-less raw-detection heuristic, in bytes
+  (default `1048576`, i.e. 1 MiB). Only applies to `broad`/`strict`
+  raw-detection modes; declared gRPC/protobuf Content-Types are unaffected.
 
 ## JSON Format
 
