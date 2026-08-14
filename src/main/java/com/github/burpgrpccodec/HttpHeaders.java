@@ -7,13 +7,17 @@ import burp.api.montoya.http.message.responses.HttpResponse;
 import java.util.Locale;
 import java.util.Optional;
 
-record HttpHeaders(String contentType, String grpcEncoding, String grpcPath, boolean response) {
+record HttpHeaders(String contentType, String grpcEncoding, String grpcPath, boolean response, String grpcStatus, String grpcMessage) {
     HttpHeaders(String contentType) {
-        this(contentType, "", "", false);
+        this(contentType, "", "", false, "", "");
     }
 
     HttpHeaders(String contentType, String grpcEncoding) {
-        this(contentType, grpcEncoding, "", false);
+        this(contentType, grpcEncoding, "", false, "", "");
+    }
+
+    HttpHeaders(String contentType, String grpcEncoding, String grpcPath, boolean response) {
+        this(contentType, grpcEncoding, grpcPath, response, "", "");
     }
 
     static HttpHeaders from(HttpRequest request) {
@@ -34,7 +38,16 @@ record HttpHeaders(String contentType, String grpcEncoding, String grpcPath, boo
                 .filter(header -> header.name().equalsIgnoreCase("grpc-encoding"))
                 .map(header -> header.value().toLowerCase(Locale.ROOT))
                 .findFirst();
-        return new HttpHeaders(contentType.orElse(""), grpcEncoding.orElse(""), grpcPath, response);
+        Optional<String> grpcStatus = message.headers().stream()
+                .filter(header -> header.name().equalsIgnoreCase("grpc-status"))
+                .map(header -> header.value())
+                .findFirst();
+        Optional<String> grpcMessage = message.headers().stream()
+                .filter(header -> header.name().equalsIgnoreCase("grpc-message"))
+                .map(header -> header.value())
+                .findFirst();
+        return new HttpHeaders(contentType.orElse(""), grpcEncoding.orElse(""), grpcPath, response,
+                grpcStatus.orElse(""), grpcMessage.orElse(""));
     }
 
     boolean isGrpc() {

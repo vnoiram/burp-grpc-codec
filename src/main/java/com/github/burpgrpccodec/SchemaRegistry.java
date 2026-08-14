@@ -22,9 +22,37 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 final class SchemaRegistry {
+    private static final String WELL_KNOWN_PROTO = """
+            syntax = "proto3";
+            package google.protobuf;
+            message Struct {
+              map<string, Value> fields = 1;
+            }
+            message Value {
+              oneof kind {
+                NullValue null_value = 1;
+                double number_value = 2;
+                string string_value = 3;
+                bool bool_value = 4;
+                Struct struct_value = 5;
+                ListValue list_value = 6;
+              }
+            }
+            message ListValue {
+              repeated Value values = 1;
+            }
+            enum NullValue {
+              NULL_VALUE = 0;
+            }
+            """;
+
     private final Map<String, SchemaMessage> messages = new HashMap<>();
     private final Map<String, SchemaMethod> methods = new HashMap<>();
     private final Map<String, SchemaEnum> enums = new HashMap<>();
+
+    SchemaRegistry() {
+        seedWellKnownTypes();
+    }
 
     Optional<SchemaMessage> message(String typeName) {
         String normalized = normalizeType(typeName);
@@ -75,6 +103,7 @@ final class SchemaRegistry {
         messages.clear();
         methods.clear();
         enums.clear();
+        seedWellKnownTypes();
         loadProtoPaths(settings.protoPaths());
         String target = settings.reflectionTarget();
         if (!target.isBlank()) {
@@ -131,6 +160,10 @@ final class SchemaRegistry {
                 }
             }
         } while (progressed);
+    }
+
+    private void seedWellKnownTypes() {
+        addProtoSource(WELL_KNOWN_PROTO);
     }
 
     private void loadProtoPaths(String protoPaths) {

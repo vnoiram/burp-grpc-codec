@@ -11,11 +11,14 @@ import java.nio.ByteOrder;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 final class ProtobufCodec {
@@ -27,6 +30,12 @@ final class ProtobufCodec {
                     1, new SchemaField(1, "type_url", "string", "", "", false, false),
                     2, new SchemaField(2, "value", "bytes", "", "", false, false)),
             Map.of());
+    private static final Set<String> WRAPPER_TYPES = Set.of(
+            "google.protobuf.DoubleValue", "google.protobuf.FloatValue",
+            "google.protobuf.Int64Value", "google.protobuf.UInt64Value",
+            "google.protobuf.Int32Value", "google.protobuf.UInt32Value",
+            "google.protobuf.BoolValue", "google.protobuf.StringValue",
+            "google.protobuf.BytesValue");
     private final SchemaRegistry schemas;
     private int maxRecursion;
 
@@ -247,12 +256,77 @@ final class ProtobufCodec {
     }
 
     private void addReadableWellKnownView(ObjectNode node, String messageType, ObjectNode nested) {
+        if (WRAPPER_TYPES.contains(messageType)) {
+            JsonNode inner = nested.path("f1").path("value");
+            if (!inner.isMissingNode()) {
+                node.set("readable", inner);
+            }
+            return;
+        }
         switch (messageType) {
             case "google.protobuf.Timestamp" -> readableTimestamp(nested).ifPresent(text -> node.put("readable", text));
             case "google.protobuf.Duration" -> readableDuration(nested).ifPresent(text -> node.put("readable", text));
+            case "google.protobuf.FieldMask" -> node.put("readable", readableFieldMask(nested));
+            case "google.protobuf.Struct" -> node.set("readable", readableStruct(nested));
+            case "google.protobuf.Value" -> node.set("readable", readableValue(nested));
+            case "google.protobuf.ListValue" -> node.set("readable", readableListValue(nested));
             default -> {
             }
         }
+    }
+
+    private static String readableFieldMask(ObjectNode nested) {
+        List<String> paths = new ArrayList<>();
+        for (JsonNode path : asIterable(nested.get("f1"))) {
+            paths.add(path.path("value").asText(""));
+        }
+        return String.join(",", paths);
+    }
+
+    private static ObjectNode readableStruct(ObjectNode nested) {
+        ObjectNode result = NODES.objectNode();
+        for (JsonNode entry : asIterable(nested.get("f1"))) {
+            JsonNode entryMessage = entry.path("value");
+            String key = entryMessage.path("f1").path("value").asText("");
+            JsonNode valueReadable = entryMessage.path("f2").path("readable");
+            result.set(key, valueReadable.isMissingNode() ? NODES.nullNode() : valueReadable);
+        }
+        return result;
+    }
+
+    private static JsonNode readableValue(ObjectNode nested) {
+        if (nested.has("f2")) {
+            return nested.get("f2").path("value");
+        }
+        if (nested.has("f3")) {
+            return nested.get("f3").path("value");
+        }
+        if (nested.has("f4")) {
+            return nested.get("f4").path("value");
+        }
+        if (nested.has("f5")) {
+            return nested.get("f5").path("readable");
+        }
+        if (nested.has("f6")) {
+            return nested.get("f6").path("readable");
+        }
+        return NODES.nullNode();
+    }
+
+    private static ArrayNode readableListValue(ObjectNode nested) {
+        ArrayNode result = NODES.arrayNode();
+        for (JsonNode item : asIterable(nested.get("f1"))) {
+            JsonNode itemReadable = item.path("readable");
+            result.add(itemReadable.isMissingNode() ? NODES.nullNode() : itemReadable);
+        }
+        return result;
+    }
+
+    private static Iterable<JsonNode> asIterable(JsonNode node) {
+        if (node == null) {
+            return List.of();
+        }
+        return node.isArray() ? node : List.of(node);
     }
 
     private static Optional<String> readableTimestamp(ObjectNode nested) {

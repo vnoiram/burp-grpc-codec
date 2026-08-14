@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.zip.DataFormatException;
 import java.util.zip.Deflater;
@@ -24,6 +25,13 @@ final class GrpcTranscoder {
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(SerializationFeature.INDENT_OUTPUT);
     private static final ObjectMapper COMPACT_JSON = new ObjectMapper();
+    private static final Map<Integer, String> GRPC_STATUS_NAMES = Map.ofEntries(
+            Map.entry(0, "OK"), Map.entry(1, "CANCELLED"), Map.entry(2, "UNKNOWN"),
+            Map.entry(3, "INVALID_ARGUMENT"), Map.entry(4, "DEADLINE_EXCEEDED"), Map.entry(5, "NOT_FOUND"),
+            Map.entry(6, "ALREADY_EXISTS"), Map.entry(7, "PERMISSION_DENIED"), Map.entry(8, "RESOURCE_EXHAUSTED"),
+            Map.entry(9, "FAILED_PRECONDITION"), Map.entry(10, "ABORTED"), Map.entry(11, "OUT_OF_RANGE"),
+            Map.entry(12, "UNIMPLEMENTED"), Map.entry(13, "INTERNAL"), Map.entry(14, "UNAVAILABLE"),
+            Map.entry(15, "DATA_LOSS"), Map.entry(16, "UNAUTHENTICATED"));
     private final ProtobufCodec protobuf;
     private final SchemaRegistry schemas;
     private final ExtensionSettings settings;
@@ -72,6 +80,13 @@ final class GrpcTranscoder {
         ObjectNode root = JSON.createObjectNode();
         root.put("_format", envelope.format);
         schema.ifPresent(message -> root.put("messageType", message.typeName()));
+        if (!headers.grpcStatus().isBlank()) {
+            root.put("grpcStatus", headers.grpcStatus());
+            grpcStatusName(headers.grpcStatus()).ifPresent(name -> root.put("grpcStatusName", name));
+        }
+        if (!headers.grpcMessage().isBlank()) {
+            root.put("grpcMessage", headers.grpcMessage());
+        }
         ArrayNode messages = root.putArray("messages");
         for (GrpcMessage message : envelope.messages) {
             ObjectNode node = messages.addObject();
@@ -148,6 +163,14 @@ final class GrpcTranscoder {
             return compress(payload, compression);
         }
         return payload;
+    }
+
+    private static Optional<String> grpcStatusName(String status) {
+        try {
+            return Optional.ofNullable(GRPC_STATUS_NAMES.get(Integer.parseInt(status.trim())));
+        } catch (NumberFormatException ex) {
+            return Optional.empty();
+        }
     }
 
     private static boolean isSupportedCompression(String compression) {

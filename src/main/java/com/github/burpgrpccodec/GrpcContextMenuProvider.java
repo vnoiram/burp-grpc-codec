@@ -9,8 +9,11 @@ import burp.api.montoya.ui.contextmenu.ContextMenuItemsProvider;
 
 import javax.swing.JMenuItem;
 import java.awt.Component;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 
 final class GrpcContextMenuProvider implements ContextMenuItemsProvider {
     private final MontoyaApi api;
@@ -29,60 +32,77 @@ final class GrpcContextMenuProvider implements ContextMenuItemsProvider {
         if (targets.isEmpty()) {
             return List.of();
         }
-        JMenuItem item = new JMenuItem("Log decoded gRPC/protobuf body");
-        item.addActionListener(actionEvent -> logDecoded(targets));
-        return List.of(item);
+        JMenuItem logItem = new JMenuItem("Log decoded gRPC/protobuf body");
+        logItem.addActionListener(actionEvent -> logDecoded(targets));
+        JMenuItem copyItem = new JMenuItem("Copy decoded gRPC/protobuf body to clipboard");
+        copyItem.addActionListener(actionEvent -> copyDecoded(targets));
+        return List.of(logItem, copyItem);
     }
 
     private void logDecoded(List<HttpRequestResponse> targets) {
         int decodedCount = 0;
         for (HttpRequestResponse requestResponse : targets) {
-            decodedCount += logRequest(requestResponse.request());
-            decodedCount += logResponse(requestResponse.response(), requestResponse.request());
+            Optional<String> request = decodeRequestBody(requestResponse.request());
+            request.ifPresent(json -> api.logging().logToOutput(
+                    "gRPC Codec: decoded request " + requestResponse.request().url() + "\n" + json));
+            Optional<String> response = decodeResponseBody(requestResponse.response(), requestResponse.request());
+            response.ifPresent(json -> api.logging().logToOutput(
+                    "gRPC Codec: decoded response for " + requestUrl(requestResponse) + "\n" + json));
+            decodedCount += (request.isPresent() ? 1 : 0) + (response.isPresent() ? 1 : 0);
         }
         if (decodedCount == 0) {
             api.logging().logToOutput("gRPC Codec: no gRPC/protobuf request or response body found in selection.");
         }
     }
 
-    private int logRequest(HttpRequest request) {
+    private void copyDecoded(List<HttpRequestResponse> targets) {
+        for (HttpRequestResponse requestResponse : targets) {
+            Optional<String> decoded = decodeRequestBody(requestResponse.request())
+                    .or(() -> decodeResponseBody(requestResponse.response(), requestResponse.request()));
+            if (decoded.isPresent()) {
+                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(decoded.get()), null);
+                api.logging().logToOutput("gRPC Codec: copied decoded body to clipboard.");
+                return;
+            }
+        }
+        api.logging().logToOutput("gRPC Codec: no gRPC/protobuf request or response body found in selection.");
+    }
+
+    private static String requestUrl(HttpRequestResponse requestResponse) {
+        return requestResponse.request() == null ? "(no request)" : requestResponse.request().url();
+    }
+
+    private Optional<String> decodeRequestBody(HttpRequest request) {
         if (request == null) {
-            return 0;
+            return Optional.empty();
         }
         HttpHeaders headers = HttpHeaders.from(request);
         byte[] body = request.body().getBytes();
         if (!transcoder.isCandidate(body, headers)) {
-            return 0;
+            return Optional.empty();
         }
         try {
-            byte[] decoded = transcoder.decode(body, headers);
-            api.logging().logToOutput("gRPC Codec: decoded request " + request.url() + "\n"
-                    + new String(decoded, StandardCharsets.UTF_8));
-            return 1;
+            return Optional.of(new String(transcoder.decode(body, headers), StandardCharsets.UTF_8));
         } catch (RuntimeException ex) {
             api.logging().logToError("gRPC Codec: failed to decode request " + request.url() + ": " + ex.getMessage());
-            return 0;
+            return Optional.empty();
         }
     }
 
-    private int logResponse(HttpResponse response, HttpRequest request) {
+    private Optional<String> decodeResponseBody(HttpResponse response, HttpRequest request) {
         if (response == null) {
-            return 0;
+            return Optional.empty();
         }
         HttpHeaders headers = HttpHeaders.from(response, request);
         byte[] body = response.body().getBytes();
         if (!transcoder.isCandidate(body, headers)) {
-            return 0;
+            return Optional.empty();
         }
         try {
-            byte[] decoded = transcoder.decode(body, headers);
-            String url = request == null ? "(no request)" : request.url();
-            api.logging().logToOutput("gRPC Codec: decoded response for " + url + "\n"
-                    + new String(decoded, StandardCharsets.UTF_8));
-            return 1;
+            return Optional.of(new String(transcoder.decode(body, headers), StandardCharsets.UTF_8));
         } catch (RuntimeException ex) {
             api.logging().logToError("gRPC Codec: failed to decode response: " + ex.getMessage());
-            return 0;
+            return Optional.empty();
         }
     }
 }
