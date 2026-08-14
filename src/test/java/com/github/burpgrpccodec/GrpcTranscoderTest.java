@@ -12,6 +12,7 @@ import java.io.ByteArrayOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -146,6 +147,16 @@ class GrpcTranscoderTest {
         assertEquals("deflate", root.get("messages").get(0).get("compression").asText());
         assertEquals("ok", root.get("messages").get(0).get("message").get("f1").get("value").asText());
         assertArrayEquals(body, transcoder.encode(json, new HttpHeaders("application/grpc", "deflate")));
+    }
+
+    @Test
+    void declaredGrpcOrProtobufCheckIgnoresBodyHeuristics() {
+        GrpcTranscoder transcoder = new GrpcTranscoder();
+        byte[] protobufShaped = {0x08, 0x01};
+
+        assertTrue(transcoder.isCandidate(protobufShaped, new HttpHeaders("text/plain")));
+        assertFalse(transcoder.isDeclaredGrpcOrProtobuf(new HttpHeaders("text/plain")));
+        assertTrue(transcoder.isDeclaredGrpcOrProtobuf(new HttpHeaders("application/grpc")));
     }
 
     @Test

@@ -83,7 +83,10 @@ Open Burp's settings and search for `Burp gRPC Codec` to configure:
 - Verbose logging: log schema reload and decode/encode activity to the
   extension output (off by default).
 - Maximum nested message depth to decode (default `24`).
-- Auto-highlight gRPC/protobuf traffic in Proxy history (off by default).
+- Auto-highlight gRPC/protobuf traffic in Proxy history (off by default). This
+  only matches declared `application/grpc*` or protobuf Content-Types (not
+  the raw-detection heuristic), since it runs on every response Burp
+  processes.
 
 ## JSON Format
 

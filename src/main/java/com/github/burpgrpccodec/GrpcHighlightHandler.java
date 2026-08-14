@@ -32,7 +32,7 @@ final class GrpcHighlightHandler implements HttpHandler {
             return ResponseReceivedAction.continueWith(responseReceived);
         }
         HttpHeaders headers = HttpHeaders.from(responseReceived, responseReceived.initiatingRequest());
-        if (!transcoder.isCandidate(responseReceived.body().getBytes(), headers)) {
+        if (!transcoder.isDeclaredGrpcOrProtobuf(headers)) {
             return ResponseReceivedAction.continueWith(responseReceived);
         }
         Annotations updated = annotations.withHighlightColor(HighlightColor.GREEN);

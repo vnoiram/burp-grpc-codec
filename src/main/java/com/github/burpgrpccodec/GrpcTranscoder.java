@@ -54,11 +54,15 @@ final class GrpcTranscoder {
         return schemas.messageCount() + " message types, " + schemas.methodCount() + " methods";
     }
 
+    boolean isDeclaredGrpcOrProtobuf(HttpHeaders headers) {
+        return headers.isGrpc() || headers.isGrpcWeb() || headers.isProtobuf();
+    }
+
     boolean isCandidate(byte[] body, HttpHeaders headers) {
         if (body.length == 0) {
             return false;
         }
-        if (headers.isGrpc() || headers.isGrpcWeb() || headers.isProtobuf()) {
+        if (isDeclaredGrpcOrProtobuf(headers)) {
             return true;
         }
         ExtensionSettings.RawDetection mode = settings == null

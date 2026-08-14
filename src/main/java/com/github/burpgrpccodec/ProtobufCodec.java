@@ -37,7 +37,7 @@ final class ProtobufCodec {
             "google.protobuf.BoolValue", "google.protobuf.StringValue",
             "google.protobuf.BytesValue");
     private final SchemaRegistry schemas;
-    private int maxRecursion;
+    private volatile int maxRecursion;
 
     ProtobufCodec() {
         this(new SchemaRegistry());
