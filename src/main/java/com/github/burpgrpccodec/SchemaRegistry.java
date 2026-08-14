@@ -2,6 +2,7 @@ package com.github.burpgrpccodec;
 
 import com.google.protobuf.DescriptorProtos;
 import com.google.protobuf.Descriptors;
+import com.google.protobuf.InvalidProtocolBufferException;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -166,7 +167,7 @@ final class SchemaRegistry {
         addProtoSource(WELL_KNOWN_PROTO);
     }
 
-    private void loadProtoPaths(String protoPaths) {
+    void loadProtoPaths(String protoPaths) {
         for (String part : protoPaths.split(",")) {
             String trimmed = part.trim();
             if (trimmed.isEmpty()) {
@@ -176,7 +177,7 @@ final class SchemaRegistry {
             try {
                 if (Files.isDirectory(path)) {
                     try (Stream<Path> files = Files.walk(path)) {
-                        files.filter(file -> file.toString().endsWith(".proto"))
+                        files.filter(file -> hasSupportedExtension(file.toString()))
                                 .forEach(this::loadProtoFile);
                     }
                 } else {
@@ -188,12 +189,40 @@ final class SchemaRegistry {
         }
     }
 
+    private static boolean hasSupportedExtension(String fileName) {
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".proto") || isDescriptorSetExtension(lower);
+    }
+
+    private static boolean isDescriptorSetExtension(String lowerCaseFileName) {
+        return lowerCaseFileName.endsWith(".protoset")
+                || lowerCaseFileName.endsWith(".pb")
+                || lowerCaseFileName.endsWith(".desc")
+                || lowerCaseFileName.endsWith(".bin");
+    }
+
     private void loadProtoFile(Path path) {
+        if (isDescriptorSetExtension(path.getFileName().toString().toLowerCase(Locale.ROOT))) {
+            loadDescriptorSetFile(path);
+            return;
+        }
         try {
             addProtoSource(Files.readString(path));
         } catch (IOException ignored) {
             // Invalid user-provided schema paths should not break message editing.
         }
+    }
+
+    private void loadDescriptorSetFile(Path path) {
+        try {
+            addDescriptorSetBytes(Files.readAllBytes(path));
+        } catch (IOException ignored) {
+            // Invalid user-provided schema paths should not break message editing.
+        }
+    }
+
+    void addDescriptorSetBytes(byte[] bytes) throws InvalidProtocolBufferException {
+        addDescriptor(DescriptorProtos.FileDescriptorSet.parseFrom(bytes));
     }
 
     private void addFileDescriptor(Descriptors.FileDescriptor file) {

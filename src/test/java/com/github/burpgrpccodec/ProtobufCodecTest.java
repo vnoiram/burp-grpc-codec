@@ -3,10 +3,13 @@ package com.github.burpgrpccodec;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.google.protobuf.DescriptorProtos;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
@@ -486,5 +489,51 @@ class ProtobufCodecTest {
         assertEquals("a", readable.get("tags").get(0).asText());
         assertEquals("b", readable.get("tags").get(1).asText());
         assertTrue(readable.get("meta").get("x").asBoolean());
+    }
+
+    @Test
+    void loadsBinaryDescriptorSetBytes() throws Exception {
+        SchemaRegistry registry = new SchemaRegistry();
+
+        registry.addDescriptorSetBytes(sampleDescriptorSet().toByteArray());
+
+        SchemaMessage schema = registry.message("demo.Greeting").orElseThrow();
+        assertEquals("text", schema.field(1).name());
+        assertEquals("string", schema.field(1).protoType());
+    }
+
+    @Test
+    void loadsDescriptorSetFileByExtension() throws Exception {
+        Path tempFile = Files.createTempFile("burp-grpc-codec-test", ".protoset");
+        try {
+            Files.write(tempFile, sampleDescriptorSet().toByteArray());
+
+            SchemaRegistry registry = new SchemaRegistry();
+            registry.loadProtoPaths(tempFile.toString());
+
+            assertEquals("text", registry.message("demo.Greeting").orElseThrow().field(1).name());
+        } finally {
+            Files.deleteIfExists(tempFile);
+        }
+    }
+
+    private static DescriptorProtos.FileDescriptorSet sampleDescriptorSet() {
+        DescriptorProtos.FieldDescriptorProto field = DescriptorProtos.FieldDescriptorProto.newBuilder()
+                .setName("text")
+                .setNumber(1)
+                .setLabel(DescriptorProtos.FieldDescriptorProto.Label.LABEL_OPTIONAL)
+                .setType(DescriptorProtos.FieldDescriptorProto.Type.TYPE_STRING)
+                .build();
+        DescriptorProtos.DescriptorProto message = DescriptorProtos.DescriptorProto.newBuilder()
+                .setName("Greeting")
+                .addField(field)
+                .build();
+        DescriptorProtos.FileDescriptorProto file = DescriptorProtos.FileDescriptorProto.newBuilder()
+                .setName("greeting.proto")
+                .setPackage("demo")
+                .setSyntax("proto3")
+                .addMessageType(message)
+                .build();
+        return DescriptorProtos.FileDescriptorSet.newBuilder().addFile(file).build();
     }
 }
