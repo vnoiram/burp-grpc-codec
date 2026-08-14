@@ -64,6 +64,9 @@ final class GrpcRequestEditor implements ExtensionProvidedHttpRequestEditor {
             if (transcoder.verboseLogging()) {
                 api.logging().logToOutput("gRPC Codec: decoded request body for " + requestResponse.request().url());
             }
+            if (transcoder.autoSelectTab()) {
+                MessageEditorTabActivator.selectTabContaining(editor.uiComponent());
+            }
         } catch (RuntimeException ex) {
             editor.setContents(ByteArray.byteArray(("Decode error: " + ex.getMessage()).getBytes(StandardCharsets.UTF_8)));
             editor.setEditable(false);

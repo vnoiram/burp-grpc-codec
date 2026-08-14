@@ -87,6 +87,13 @@ Open Burp's settings and search for `Burp gRPC Codec` to configure:
   only matches declared `application/grpc*` or protobuf Content-Types (not
   the raw-detection heuristic), since it runs on every response Burp
   processes.
+- Auto-select the `gRPC Codec` tab when a message decodes successfully (off
+  by default). The Montoya API has no official way to select a message-viewer
+  tab; this works by walking up the Swing component tree to find the
+  containing `JTabbedPane` and selecting it there, the same unofficial
+  technique other Burp extensions (e.g. Paramalyzer) use. It depends on
+  Burp's internal UI structure and could stop working in a future Burp
+  release; failures are silently ignored rather than breaking decoding.
 
 ## JSON Format
 

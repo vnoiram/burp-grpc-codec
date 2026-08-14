@@ -50,6 +50,10 @@ final class GrpcTranscoder {
         return settings != null && settings.verboseLogging();
     }
 
+    boolean autoSelectTab() {
+        return settings != null && settings.autoSelectTab();
+    }
+
     String schemaSummary() {
         return schemas.messageCount() + " message types, " + schemas.methodCount() + " methods";
     }

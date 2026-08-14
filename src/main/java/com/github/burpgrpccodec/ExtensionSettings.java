@@ -19,6 +19,7 @@ final class ExtensionSettings {
     private static final String VERBOSE_LOGGING = "Verbose logging";
     private static final String MAX_DEPTH = "Max message nesting depth";
     private static final String AUTO_HIGHLIGHT = "Auto-highlight gRPC/protobuf traffic";
+    private static final String AUTO_SELECT_TAB = "Auto-select gRPC Codec tab";
 
     private final PersistedObject data;
     private final SettingsPanelWithData panel;
@@ -54,6 +55,10 @@ final class ExtensionSettings {
                         "Maximum nested message depth to decode."))
                 .withSetting(SettingsPanelSetting.booleanSetting(AUTO_HIGHLIGHT,
                         "Highlight and annotate detected gRPC/protobuf traffic in Proxy history.", false))
+                .withSetting(SettingsPanelSetting.booleanSetting(AUTO_SELECT_TAB,
+                        "Automatically switch to the gRPC Codec tab when a message is decoded. "
+                                + "Relies on Burp's internal Swing tab structure and may stop working in a future Burp release.",
+                        false))
                 .build();
         loadDefaults();
     }
@@ -115,6 +120,14 @@ final class ExtensionSettings {
         return Boolean.TRUE.equals(highlight);
     }
 
+    boolean autoSelectTab() {
+        Boolean autoSelect = panel.getBoolean(AUTO_SELECT_TAB);
+        if (autoSelect == null) {
+            autoSelect = data.getBoolean(AUTO_SELECT_TAB);
+        }
+        return Boolean.TRUE.equals(autoSelect);
+    }
+
     int maxDepth() {
         try {
             int depth = Integer.parseInt(value(MAX_DEPTH));
@@ -136,6 +149,7 @@ final class ExtensionSettings {
         data.setBoolean(VERBOSE_LOGGING, verboseLogging());
         data.setString(MAX_DEPTH, value(MAX_DEPTH));
         data.setBoolean(AUTO_HIGHLIGHT, autoHighlight());
+        data.setBoolean(AUTO_SELECT_TAB, autoSelectTab());
     }
 
     private void loadDefaults() {
@@ -158,6 +172,10 @@ final class ExtensionSettings {
         Boolean highlight = data.getBoolean(AUTO_HIGHLIGHT);
         if (highlight == null) {
             data.setBoolean(AUTO_HIGHLIGHT, false);
+        }
+        Boolean autoSelect = data.getBoolean(AUTO_SELECT_TAB);
+        if (autoSelect == null) {
+            data.setBoolean(AUTO_SELECT_TAB, false);
         }
     }
 

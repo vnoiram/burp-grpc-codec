@@ -67,6 +67,9 @@ final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
                 api.logging().logToOutput("gRPC Codec: decoded response body ("
                         + requestResponse.response().statusCode() + ")");
             }
+            if (transcoder.autoSelectTab()) {
+                MessageEditorTabActivator.selectTabContaining(editor.uiComponent());
+            }
         } catch (RuntimeException ex) {
             editor.setContents(ByteArray.byteArray(("Decode error: " + ex.getMessage()).getBytes(StandardCharsets.UTF_8)));
             editor.setEditable(false);
