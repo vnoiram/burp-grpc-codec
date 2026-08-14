@@ -377,4 +377,114 @@ class ProtobufCodecTest {
         System.arraycopy(inner, 0, out, 2, inner.length);
         return out;
     }
+
+    @Test
+    void addsReadableViewForWellKnownWrapperTypes() throws Exception {
+        SchemaRegistry registry = new SchemaRegistry();
+        registry.addProtoSource("""
+                syntax = "proto3";
+                package demo;
+                message Wrapped {
+                  google.protobuf.StringValue name = 1;
+                }
+                """);
+        SchemaMessage schema = registry.message("demo.Wrapped").orElseThrow();
+        ObjectNode message = (ObjectNode) JSON.readTree("""
+                {"f1": {"type": "message", "value": {"f1": {"type": "string", "value": "hi"}}}}
+                """);
+
+        ProtobufCodec codec = new ProtobufCodec(registry);
+        byte[] protobuf = codec.encodeMessage(message, schema);
+        ObjectNode decoded = codec.decodeMessage(protobuf, schema);
+
+        assertEquals("hi", decoded.get("f1").get("readable").asText());
+    }
+
+    @Test
+    void addsReadableViewForFieldMask() throws Exception {
+        SchemaRegistry registry = new SchemaRegistry();
+        registry.addProtoSource("""
+                syntax = "proto3";
+                package demo;
+                message Req {
+                  google.protobuf.FieldMask update_mask = 1;
+                }
+                """);
+        SchemaMessage schema = registry.message("demo.Req").orElseThrow();
+        ObjectNode message = (ObjectNode) JSON.readTree("""
+                {"f1": {"type": "message", "value": {"f1": [
+                    {"type": "string", "value": "name"},
+                    {"type": "string", "value": "email"}
+                ]}}}
+                """);
+
+        ProtobufCodec codec = new ProtobufCodec(registry);
+        byte[] protobuf = codec.encodeMessage(message, schema);
+        ObjectNode decoded = codec.decodeMessage(protobuf, schema);
+
+        assertEquals("name,email", decoded.get("f1").get("readable").asText());
+    }
+
+    @Test
+    void addsReadableJsonViewForStructValueAndListValue() throws Exception {
+        SchemaRegistry registry = new SchemaRegistry();
+        registry.addProtoSource("""
+                syntax = "proto3";
+                package demo;
+                message Payload {
+                  google.protobuf.Struct data = 1;
+                }
+                """);
+        SchemaMessage schema = registry.message("demo.Payload").orElseThrow();
+
+        ObjectNode message = (ObjectNode) JSON.readTree("""
+                {
+                  "f1": {"type": "message", "value": {
+                    "f1": [
+                      {"type": "message", "value": {
+                        "f1": {"type": "string", "value": "name"},
+                        "f2": {"type": "message", "value": {"f3": {"type": "string", "value": "ok"}}}
+                      }},
+                      {"type": "message", "value": {
+                        "f1": {"type": "string", "value": "count"},
+                        "f2": {"type": "message", "value": {"f2": {"type": "double", "value": 3}}}
+                      }},
+                      {"type": "message", "value": {
+                        "f1": {"type": "string", "value": "flag"},
+                        "f2": {"type": "message", "value": {"f4": {"type": "bool", "value": true}}}
+                      }},
+                      {"type": "message", "value": {
+                        "f1": {"type": "string", "value": "tags"},
+                        "f2": {"type": "message", "value": {"f6": {"type": "message", "value": {"f1": [
+                          {"type": "message", "value": {"f3": {"type": "string", "value": "a"}}},
+                          {"type": "message", "value": {"f3": {"type": "string", "value": "b"}}}
+                        ]}}}}
+                      }},
+                      {"type": "message", "value": {
+                        "f1": {"type": "string", "value": "meta"},
+                        "f2": {"type": "message", "value": {"f5": {"type": "message", "value": {"f1": {
+                          "type": "message", "value": {
+                            "f1": {"type": "string", "value": "x"},
+                            "f2": {"type": "message", "value": {"f4": {"type": "bool", "value": true}}}
+                          }
+                        }}}}}
+                      }}
+                    ]
+                  }}
+                }
+                """);
+
+        ProtobufCodec codec = new ProtobufCodec(registry);
+        byte[] protobuf = codec.encodeMessage(message, schema);
+        ObjectNode decoded = codec.decodeMessage(protobuf, schema);
+
+        JsonNode readable = decoded.get("f1").get("readable");
+        assertEquals("ok", readable.get("name").asText());
+        assertEquals(3.0, readable.get("count").asDouble());
+        assertTrue(readable.get("flag").asBoolean());
+        assertEquals(2, readable.get("tags").size());
+        assertEquals("a", readable.get("tags").get(0).asText());
+        assertEquals("b", readable.get("tags").get(1).asText());
+        assertTrue(readable.get("meta").get("x").asBoolean());
+    }
 }

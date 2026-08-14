@@ -148,6 +148,22 @@ class GrpcTranscoderTest {
         assertArrayEquals(body, transcoder.encode(json, new HttpHeaders("application/grpc", "deflate")));
     }
 
+    @Test
+    void exposesGrpcStatusAndMessageFromHeaders() throws Exception {
+        byte[] body = new byte[] {
+                0, 0, 0, 0, 4,
+                0x0a, 0x02, 'o', 'k'
+        };
+        GrpcTranscoder transcoder = new GrpcTranscoder();
+
+        byte[] json = transcoder.decode(body, new HttpHeaders("application/grpc", "", "", true, "5", "not found"));
+        JsonNode root = JSON.readTree(json);
+
+        assertEquals("5", root.get("grpcStatus").asText());
+        assertEquals("NOT_FOUND", root.get("grpcStatusName").asText());
+        assertEquals("not found", root.get("grpcMessage").asText());
+    }
+
     private static byte[] gzip(byte[] bytes) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (GZIPOutputStream gzip = new GZIPOutputStream(out)) {

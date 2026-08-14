@@ -31,9 +31,12 @@ back into the original wire format when Burp sends the message.
 - Marks fields that belong to a `oneof` and fields that are protobuf `map<K, V>`
   entries in the decoded JSON.
 - Adds a read-only convenience view for `google.protobuf.Any` (resolves the
-  embedded message by `type_url` against the schema registry) and for
-  `google.protobuf.Timestamp` / `Duration` (ISO-8601 / seconds). The raw
-  fields remain authoritative for re-encoding.
+  embedded message by `type_url` against the schema registry),
+  `google.protobuf.Timestamp` / `Duration` (ISO-8601 / seconds), the
+  well-known wrapper types (`StringValue`, `Int32Value`, `BoolValue`, etc.),
+  `google.protobuf.FieldMask` (comma-joined paths), and
+  `google.protobuf.Struct` / `Value` / `ListValue` (converted to equivalent
+  plain JSON). The raw fields remain authoritative for re-encoding.
 - Accepts schema field names in place of `f<number>` keys when editing JSON,
   as long as a schema is available.
 - Decompresses and recompresses gzip- or deflate-compressed gRPC messages when
@@ -44,8 +47,13 @@ back into the original wire format when Burp sends the message.
 - Adds a "Log decoded gRPC/protobuf body" context menu item that prints
   decoded JSON to the extension output for the selected message(s), without
   needing to open the editor tab.
+- Adds a "Copy decoded gRPC/protobuf body to clipboard" context menu item.
 - Optionally highlights and annotates Proxy history responses detected as
   gRPC/protobuf (off by default; see Settings).
+- Surfaces `grpc-status` / `grpc-message` headers (common on grpc-web
+  trailers-only responses) as read-only `grpcStatus` / `grpcStatusName` /
+  `grpcMessage` fields in the decoded JSON, with standard gRPC status codes
+  mapped to their name.
 
 ## Build
 
@@ -128,13 +136,24 @@ With schema metadata, fields can also carry:
   message type and its decoded contents, when the type is known to the
   schema registry. Read-only; edit the raw `type_url`/`value` fields (`f1`/
   `f2` under `value`) to change what gets re-encoded.
-- `readable`: for `google.protobuf.Timestamp` (ISO-8601) and
-  `google.protobuf.Duration` (`"<seconds>s"`). Read-only; edit the raw
-  `seconds`/`nanos` fields (`f1`/`f2` under `value`) to change what gets
-  re-encoded.
+- `readable`: a decode-only convenience value, present for several
+  `google.protobuf` well-known types. Always edit the raw fields under
+  `value` (not `readable`) to change what gets re-encoded:
+  - `Timestamp` -> ISO-8601 string; `Duration` -> `"<seconds>s"`.
+  - Wrapper types (`StringValue`, `Int32Value`, `BoolValue`, etc.) -> the
+    inner scalar value.
+  - `FieldMask` -> comma-joined `paths`.
+  - `Struct` / `Value` / `ListValue` -> the equivalent plain JSON
+    object/array/scalar/`null`.
 
 When a schema is available, JSON keys may also use the schema's field name
 instead of `f<number>` (e.g. `"greeting"` instead of `"f1"`).
+
+When present on the response, `grpc-status` / `grpc-message` HTTP headers are
+surfaced as read-only `grpcStatus` / `grpcStatusName` / `grpcMessage` fields
+at the root of the decoded JSON (not inside `messages`). These reflect the
+HTTP headers at decode time and are not written back on encode; edit the
+headers directly via Burp's header editor instead.
 
 ## Limits
 
