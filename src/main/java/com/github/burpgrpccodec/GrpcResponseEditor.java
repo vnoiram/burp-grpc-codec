@@ -33,6 +33,9 @@ final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
         try {
             byte[] edited = editor.getContents().getBytes();
             byte[] body = transcoder.encode(edited, HttpHeaders.from(current.response(), current.request()));
+            if (transcoder.verboseLogging()) {
+                api.logging().logToOutput("gRPC Codec: encoded edited response body (" + body.length + " bytes)");
+            }
             return current.response().withBody(ByteArray.byteArray(body));
         } catch (RuntimeException ex) {
             api.logging().logToError("gRPC Codec response encode error: " + ex.getMessage());
@@ -51,12 +54,19 @@ final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
         }
         try {
             transcoder.reloadSchemas();
+            if (transcoder.verboseLogging()) {
+                api.logging().logToOutput("gRPC Codec: schema reload -> " + transcoder.schemaSummary());
+            }
             byte[] decoded = transcoder.decode(
                     requestResponse.response().body().getBytes(),
                     HttpHeaders.from(requestResponse.response(), requestResponse.request()));
             editor.setContents(ByteArray.byteArray(decoded));
             editor.setEditable(true);
             this.decoded = true;
+            if (transcoder.verboseLogging()) {
+                api.logging().logToOutput("gRPC Codec: decoded response body ("
+                        + requestResponse.response().statusCode() + ")");
+            }
         } catch (RuntimeException ex) {
             editor.setContents(ByteArray.byteArray(("Decode error: " + ex.getMessage()).getBytes(StandardCharsets.UTF_8)));
             editor.setEditable(false);

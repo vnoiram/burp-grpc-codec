@@ -33,6 +33,9 @@ final class GrpcRequestEditor implements ExtensionProvidedHttpRequestEditor {
         try {
             byte[] edited = editor.getContents().getBytes();
             byte[] body = transcoder.encode(edited, HttpHeaders.from(current.request()));
+            if (transcoder.verboseLogging()) {
+                api.logging().logToOutput("gRPC Codec: encoded edited request body (" + body.length + " bytes)");
+            }
             return current.request().withBody(ByteArray.byteArray(body));
         } catch (RuntimeException ex) {
             api.logging().logToError("gRPC Codec request encode error: " + ex.getMessage());
@@ -51,10 +54,16 @@ final class GrpcRequestEditor implements ExtensionProvidedHttpRequestEditor {
         }
         try {
             transcoder.reloadSchemas();
+            if (transcoder.verboseLogging()) {
+                api.logging().logToOutput("gRPC Codec: schema reload -> " + transcoder.schemaSummary());
+            }
             byte[] decoded = transcoder.decode(requestResponse.request().body().getBytes(), HttpHeaders.from(requestResponse.request()));
             editor.setContents(ByteArray.byteArray(decoded));
             editor.setEditable(true);
             this.decoded = true;
+            if (transcoder.verboseLogging()) {
+                api.logging().logToOutput("gRPC Codec: decoded request body for " + requestResponse.request().url());
+            }
         } catch (RuntimeException ex) {
             editor.setContents(ByteArray.byteArray(("Decode error: " + ex.getMessage()).getBytes(StandardCharsets.UTF_8)));
             editor.setEditable(false);

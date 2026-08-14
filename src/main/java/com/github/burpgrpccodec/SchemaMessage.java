@@ -6,4 +6,8 @@ record SchemaMessage(String typeName, Map<Integer, SchemaField> fieldsByNumber, 
     SchemaField field(int number) {
         return fieldsByNumber.get(number);
     }
+
+    SchemaField fieldByName(String name) {
+        return fieldsByName.get(name);
+    }
 }

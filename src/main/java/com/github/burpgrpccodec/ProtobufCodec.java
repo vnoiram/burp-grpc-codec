@@ -10,22 +10,41 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.regex.Pattern;
 
 final class ProtobufCodec {
     private static final JsonNodeFactory NODES = JsonNodeFactory.instance;
-    private static final int MAX_RECURSION = 24;
+    private static final Pattern FIELD_NAME = Pattern.compile("f[1-9][0-9]*");
+    private static final SchemaMessage ANY_ENVELOPE_SCHEMA = new SchemaMessage(
+            "google.protobuf.Any",
+            Map.of(
+                    1, new SchemaField(1, "type_url", "string", "", "", false, false),
+                    2, new SchemaField(2, "value", "bytes", "", "", false, false)),
+            Map.of());
     private final SchemaRegistry schemas;
+    private int maxRecursion;
 
     ProtobufCodec() {
         this(new SchemaRegistry());
     }
 
     ProtobufCodec(SchemaRegistry schemas) {
+        this(schemas, 24);
+    }
+
+    ProtobufCodec(SchemaRegistry schemas, int maxRecursion) {
         this.schemas = schemas;
+        this.maxRecursion = maxRecursion > 0 ? maxRecursion : 24;
+    }
+
+    void setMaxRecursion(int maxRecursion) {
+        this.maxRecursion = maxRecursion > 0 ? maxRecursion : 24;
     }
 
     boolean looksLikeProtobuf(byte[] bytes) {
@@ -57,7 +76,7 @@ final class ProtobufCodec {
         Iterator<Map.Entry<String, JsonNode>> fields = object.fields();
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> field = fields.next();
-            int fieldNumber = parseFieldName(field.getKey());
+            int fieldNumber = resolveFieldNumber(schema, field.getKey());
             SchemaField schemaField = schema == null ? null : schema.field(fieldNumber);
             JsonNode value = field.getValue();
             if (schemaField != null && schemaField.packed() && value.isArray()) {
@@ -76,7 +95,7 @@ final class ProtobufCodec {
     }
 
     private ObjectNode decodeMessage(byte[] bytes, Optional<SchemaMessage> schema, int depth) {
-        if (depth > MAX_RECURSION) {
+        if (depth > maxRecursion) {
             throw new IllegalArgumentException("protobuf nesting is too deep");
         }
         ProtoReader reader = new ProtoReader(bytes);
@@ -106,12 +125,16 @@ final class ProtobufCodec {
         if (schemaField == null) {
             return typed("varint").put("value", value);
         }
-        return switch (schemaField.protoType()) {
+        ObjectNode node = switch (schemaField.protoType()) {
             case "bool" -> typed("bool").put("value", value != 0);
             case "sint32", "sint64" -> typed(schemaField.protoType()).put("value", decodeZigZag(value));
             case "int32", "uint32", "int64", "uint64", "enum" -> typed(schemaField.protoType()).put("value", value);
             default -> typed("varint").put("value", value);
         };
+        if (!schemaField.enumType().isBlank()) {
+            schemas.enumName(schemaField.enumType(), value).ifPresent(name -> node.put("enumName", name));
+        }
+        return node;
     }
 
     private ObjectNode decodeFixed64(long value, SchemaField schemaField) {
@@ -149,10 +172,15 @@ final class ProtobufCodec {
                     if (schemaField.repeated() && schemaField.packed()) {
                         return decodePacked(value, schemaField);
                     }
+                    if ("google.protobuf.Any".equals(schemaField.messageType())) {
+                        return decodeAny(value, depth);
+                    }
                     if (!schemaField.messageType().isBlank()) {
                         ObjectNode node = typed("message");
                         node.put("messageType", schemaField.messageType());
-                        node.set("value", decodeMessage(value, schemas.message(schemaField.messageType()), depth));
+                        ObjectNode nested = decodeMessage(value, schemas.message(schemaField.messageType()), depth);
+                        node.set("value", nested);
+                        addReadableWellKnownView(node, schemaField.messageType(), nested);
                         return node;
                     }
                 }
@@ -195,13 +223,67 @@ final class ProtobufCodec {
         return items;
     }
 
+    private ObjectNode decodeAny(byte[] value, int depth) {
+        ObjectNode envelope = decodeMessage(value, Optional.of(ANY_ENVELOPE_SCHEMA), depth);
+        ObjectNode node = typed("message");
+        node.put("messageType", "google.protobuf.Any");
+        node.set("value", envelope);
+        String typeUrl = envelope.path("f1").path("value").asText("");
+        JsonNode valueField = envelope.path("f2");
+        if (!typeUrl.isBlank() && valueField.has("value")) {
+            String resolvedType = typeUrl.contains("/") ? typeUrl.substring(typeUrl.lastIndexOf('/') + 1) : typeUrl;
+            Optional<SchemaMessage> innerSchema = schemas.message(resolvedType);
+            if (innerSchema.isPresent()) {
+                try {
+                    byte[] innerBytes = Base64.getDecoder().decode(valueField.path("value").asText(""));
+                    node.put("anyType", resolvedType);
+                    node.set("anyValue", decodeMessage(innerBytes, innerSchema, depth + 1));
+                } catch (RuntimeException ignored) {
+                    // Leave the raw type_url/value envelope untouched when the embedded message cannot be decoded.
+                }
+            }
+        }
+        return node;
+    }
+
+    private void addReadableWellKnownView(ObjectNode node, String messageType, ObjectNode nested) {
+        switch (messageType) {
+            case "google.protobuf.Timestamp" -> readableTimestamp(nested).ifPresent(text -> node.put("readable", text));
+            case "google.protobuf.Duration" -> readableDuration(nested).ifPresent(text -> node.put("readable", text));
+            default -> {
+            }
+        }
+    }
+
+    private static Optional<String> readableTimestamp(ObjectNode nested) {
+        JsonNode secondsNode = nested.path("f1").path("value");
+        if (!secondsNode.isIntegralNumber()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Instant.ofEpochSecond(secondsNode.asLong(), nested.path("f2").path("value").asLong(0)).toString());
+        } catch (RuntimeException ex) {
+            return Optional.empty();
+        }
+    }
+
+    private static Optional<String> readableDuration(ObjectNode nested) {
+        JsonNode secondsNode = nested.path("f1").path("value");
+        if (!secondsNode.isIntegralNumber()) {
+            return Optional.empty();
+        }
+        long seconds = secondsNode.asLong();
+        long nanos = nested.path("f2").path("value").asLong(0);
+        return Optional.of((seconds + nanos / 1_000_000_000.0) + "s");
+    }
+
     private void writeField(ByteArrayOutputStream out, int fieldNumber, JsonNode field, SchemaField schemaField) {
         String type = field.path("type").asText(defaultType(schemaField));
         JsonNode value = field.path("value");
         switch (type) {
             case "varint", "int32", "int64", "uint32", "uint64", "enum" -> {
                 writeVarint(out, ((long) fieldNumber << 3));
-                writeVarint(out, value.asLong());
+                writeVarint(out, resolveVarintValue(field, value, schemaField));
             }
             case "bool" -> {
                 writeVarint(out, ((long) fieldNumber << 3));
@@ -246,7 +328,7 @@ final class ProtobufCodec {
         String type = field.path("type").asText(defaultType(schemaField));
         JsonNode value = field.path("value");
         switch (type) {
-            case "varint", "int32", "int64", "uint32", "uint64", "enum" -> writeVarint(out, value.asLong());
+            case "varint", "int32", "int64", "uint32", "uint64", "enum" -> writeVarint(out, resolveVarintValue(field, value, schemaField));
             case "bool" -> writeVarint(out, value.asBoolean() ? 1 : 0);
             case "sint32", "sint64" -> writeVarint(out, encodeZigZag(value.asLong()));
             case "fixed64", "sfixed64" -> writeLittleEndian64(out, value.asLong());
@@ -277,6 +359,12 @@ final class ProtobufCodec {
         }
         if (!schemaField.enumType().isBlank()) {
             object.put("enumType", schemaField.enumType());
+        }
+        if (!schemaField.oneof().isBlank()) {
+            object.put("oneof", schemaField.oneof());
+        }
+        if (schemaField.map()) {
+            object.put("map", true);
         }
     }
 
@@ -322,11 +410,27 @@ final class ProtobufCodec {
         return readable == text.length();
     }
 
-    private static int parseFieldName(String name) {
-        if (!name.matches("f[1-9][0-9]*")) {
-            throw new IllegalArgumentException("field names must use f<number>: " + name);
+    private static int resolveFieldNumber(SchemaMessage schema, String key) {
+        if (FIELD_NAME.matcher(key).matches()) {
+            return Integer.parseInt(key.substring(1));
         }
-        return Integer.parseInt(name.substring(1));
+        if (schema != null) {
+            SchemaField named = schema.fieldByName(key);
+            if (named != null) {
+                return named.number();
+            }
+        }
+        throw new IllegalArgumentException("field names must use f<number>: " + key);
+    }
+
+    private long resolveVarintValue(JsonNode field, JsonNode value, SchemaField schemaField) {
+        if (schemaField != null && !schemaField.enumType().isBlank() && field.hasNonNull("enumName")) {
+            OptionalLong resolved = schemas.enumValue(schemaField.enumType(), field.get("enumName").asText());
+            if (resolved.isPresent()) {
+                return resolved.getAsLong();
+            }
+        }
+        return value.asLong();
     }
 
     private static long decodeZigZag(long value) {

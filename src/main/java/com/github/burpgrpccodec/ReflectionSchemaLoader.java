@@ -14,11 +14,18 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 final class ReflectionSchemaLoader {
+    private static final int DEFAULT_TIMEOUT_SECONDS = 5;
+
     Optional<DescriptorProtos.FileDescriptorSet> load(String target, boolean tls) {
+        return load(target, tls, DEFAULT_TIMEOUT_SECONDS);
+    }
+
+    Optional<DescriptorProtos.FileDescriptorSet> load(String target, boolean tls, int timeoutSeconds) {
         HostPort hostPort = HostPort.parse(target);
         if (hostPort == null) {
             return Optional.empty();
         }
+        int deadline = timeoutSeconds > 0 ? timeoutSeconds : DEFAULT_TIMEOUT_SECONDS;
         ManagedChannelBuilder<?> builder = ManagedChannelBuilder.forAddress(hostPort.host, hostPort.port);
         if (!tls) {
             builder.usePlaintext();
@@ -26,9 +33,9 @@ final class ReflectionSchemaLoader {
         ManagedChannel channel = builder.build();
         try {
             DescriptorProtos.FileDescriptorSet.Builder descriptors = DescriptorProtos.FileDescriptorSet.newBuilder();
-            ReflectionCollector serviceCollector = new ReflectionCollector();
+            ReflectionCollector serviceCollector = new ReflectionCollector(deadline);
             StreamObserver<ServerReflectionRequest> serviceRequests = ServerReflectionGrpc.newStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .withDeadlineAfter(deadline, TimeUnit.SECONDS)
                     .serverReflectionInfo(serviceCollector);
             serviceRequests.onNext(ServerReflectionRequest.newBuilder().setListServices("").build());
             serviceRequests.onCompleted();
@@ -36,7 +43,7 @@ final class ReflectionSchemaLoader {
                 return Optional.empty();
             }
             for (String serviceName : serviceCollector.services()) {
-                loadService(channel, serviceName, descriptors);
+                loadService(channel, serviceName, descriptors, deadline);
             }
             return Optional.of(descriptors.build());
         } catch (RuntimeException ex) {
@@ -49,11 +56,12 @@ final class ReflectionSchemaLoader {
     private void loadService(
             ManagedChannel channel,
             String serviceName,
-            DescriptorProtos.FileDescriptorSet.Builder descriptors
+            DescriptorProtos.FileDescriptorSet.Builder descriptors,
+            int timeoutSeconds
     ) {
-        ReflectionCollector descriptorCollector = new ReflectionCollector();
+        ReflectionCollector descriptorCollector = new ReflectionCollector(timeoutSeconds);
         StreamObserver<ServerReflectionRequest> descriptorRequests = ServerReflectionGrpc.newStub(channel)
-                .withDeadlineAfter(5, TimeUnit.SECONDS)
+                .withDeadlineAfter(timeoutSeconds, TimeUnit.SECONDS)
                 .serverReflectionInfo(descriptorCollector);
         descriptorRequests.onNext(ServerReflectionRequest.newBuilder().setFileContainingSymbol(serviceName).build());
         descriptorRequests.onCompleted();
@@ -64,8 +72,13 @@ final class ReflectionSchemaLoader {
 
     private static final class ReflectionCollector implements StreamObserver<ServerReflectionResponse> {
         private final CountDownLatch done = new CountDownLatch(1);
+        private final int timeoutSeconds;
         private final java.util.List<String> services = new java.util.ArrayList<>();
         private final java.util.List<DescriptorProtos.FileDescriptorProto> descriptors = new java.util.ArrayList<>();
+
+        ReflectionCollector(int timeoutSeconds) {
+            this.timeoutSeconds = timeoutSeconds;
+        }
 
         @Override
         public void onNext(ServerReflectionResponse response) {
@@ -91,7 +104,7 @@ final class ReflectionSchemaLoader {
 
         boolean await() {
             try {
-                return done.await(5, TimeUnit.SECONDS);
+                return done.await(timeoutSeconds, TimeUnit.SECONDS);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
                 return false;

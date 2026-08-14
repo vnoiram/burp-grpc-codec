@@ -14,12 +14,16 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
+import java.util.zip.DataFormatException;
+import java.util.zip.Deflater;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
+import java.util.zip.Inflater;
 
 final class GrpcTranscoder {
     private static final ObjectMapper JSON = new ObjectMapper()
             .enable(SerializationFeature.INDENT_OUTPUT);
+    private static final ObjectMapper COMPACT_JSON = new ObjectMapper();
     private final ProtobufCodec protobuf;
     private final SchemaRegistry schemas;
     private final ExtensionSettings settings;
@@ -31,7 +35,15 @@ final class GrpcTranscoder {
     GrpcTranscoder(SchemaRegistry schemas, ExtensionSettings settings) {
         this.schemas = schemas;
         this.settings = settings;
-        this.protobuf = new ProtobufCodec(schemas);
+        this.protobuf = new ProtobufCodec(schemas, settings == null ? 24 : settings.maxDepth());
+    }
+
+    boolean verboseLogging() {
+        return settings != null && settings.verboseLogging();
+    }
+
+    String schemaSummary() {
+        return schemas.messageCount() + " message types, " + schemas.methodCount() + " methods";
     }
 
     boolean isCandidate(byte[] body, HttpHeaders headers) {
@@ -54,6 +66,7 @@ final class GrpcTranscoder {
     }
 
     byte[] decode(byte[] body, HttpHeaders headers) {
+        applyLiveSettings();
         Envelope envelope = decodeEnvelope(body, headers);
         Optional<SchemaMessage> schema = schemaFor(headers, envelope.format, "");
         ObjectNode root = JSON.createObjectNode();
@@ -66,8 +79,8 @@ final class GrpcTranscoder {
             if (message.compression != null) {
                 node.put("compression", message.compression);
             }
-            if (message.compressed && "gzip".equals(message.compression)) {
-                decodeGzipMessage(schema, message, node);
+            if (message.compressed && isSupportedCompression(message.compression)) {
+                decodeCompressedMessage(schema, message, node);
             } else if (message.compressed) {
                 node.put("compressedBytes", Base64.getEncoder().encodeToString(message.payload));
             } else {
@@ -86,6 +99,7 @@ final class GrpcTranscoder {
     }
 
     byte[] encode(byte[] jsonBytes, HttpHeaders headers) {
+        applyLiveSettings();
         try {
             JsonNode root = JSON.readTree(jsonBytes);
             String format = root.path("_format").asText(detectFormat(headers));
@@ -93,7 +107,7 @@ final class GrpcTranscoder {
             List<GrpcMessage> messages = new ArrayList<>();
             for (JsonNode item : root.withArray("messages")) {
                 boolean compressed = item.path("compressed").asBoolean(false);
-                String compression = item.path("compression").asText(headers.isGzipEncoded() ? "gzip" : "");
+                String compression = item.path("compression").asText(compressionName(headers));
                 byte[] payload = encodePayload(item, schema, compressed, compression);
                 messages.add(new GrpcMessage(compressed, payload, compression.isBlank() ? null : compression));
             }
@@ -114,9 +128,9 @@ final class GrpcTranscoder {
         }
     }
 
-    private void decodeGzipMessage(Optional<SchemaMessage> schema, GrpcMessage message, ObjectNode node) {
+    private void decodeCompressedMessage(Optional<SchemaMessage> schema, GrpcMessage message, ObjectNode node) {
         try {
-            byte[] decompressed = gunzip(message.payload);
+            byte[] decompressed = decompress(message.payload, message.compression);
             node.set("message", schema.map(schemaMessage -> protobuf.decodeMessage(decompressed, schemaMessage))
                     .orElseGet(() -> protobuf.decodeMessage(decompressed)));
         } catch (RuntimeException ex) {
@@ -130,10 +144,32 @@ final class GrpcTranscoder {
         }
         byte[] payload = schema.map(schemaMessage -> protobuf.encodeMessage((ObjectNode) item.path("message"), schemaMessage))
                 .orElseGet(() -> protobuf.encodeMessage((ObjectNode) item.path("message")));
-        if (compressed && "gzip".equals(compression)) {
-            return gzip(payload);
+        if (compressed && isSupportedCompression(compression)) {
+            return compress(payload, compression);
         }
         return payload;
+    }
+
+    private static boolean isSupportedCompression(String compression) {
+        return "gzip".equals(compression) || "deflate".equals(compression);
+    }
+
+    private static String compressionName(HttpHeaders headers) {
+        if (headers.isGzipEncoded()) {
+            return "gzip";
+        }
+        if (headers.isDeflateEncoded()) {
+            return "deflate";
+        }
+        return "";
+    }
+
+    private static byte[] decompress(byte[] bytes, String compression) {
+        return "deflate".equals(compression) ? inflate(bytes) : gunzip(bytes);
+    }
+
+    private static byte[] compress(byte[] bytes, String compression) {
+        return "deflate".equals(compression) ? deflate(bytes) : gzip(bytes);
     }
 
     private Envelope decodeEnvelope(byte[] body, HttpHeaders headers) {
@@ -181,7 +217,8 @@ final class GrpcTranscoder {
             offset += length;
             if (!trailerFrame) {
                 boolean compressed = (flags & 0x01) != 0;
-                messages.add(new GrpcMessage(compressed, payload, compressed && headers.isGzipEncoded() ? "gzip" : null));
+                String compression = compressionName(headers);
+                messages.add(new GrpcMessage(compressed, payload, compressed && !compression.isBlank() ? compression : null));
             } else {
                 trailers.add(payload);
             }
@@ -274,9 +311,51 @@ final class GrpcTranscoder {
         return out.toByteArray();
     }
 
-    private static byte[] toPrettyBytes(JsonNode node) {
+    private static byte[] inflate(byte[] bytes) {
+        Inflater inflater = new Inflater();
+        inflater.setInput(bytes);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
         try {
-            return JSON.writeValueAsBytes(node);
+            while (!inflater.finished()) {
+                int count = inflater.inflate(buffer);
+                if (count == 0 && (inflater.needsInput() || inflater.needsDictionary())) {
+                    break;
+                }
+                out.write(buffer, 0, count);
+            }
+        } catch (DataFormatException ex) {
+            throw new IllegalArgumentException("Cannot decompress deflate message", ex);
+        } finally {
+            inflater.end();
+        }
+        return out.toByteArray();
+    }
+
+    private static byte[] deflate(byte[] bytes) {
+        Deflater deflater = new Deflater();
+        deflater.setInput(bytes);
+        deflater.finish();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        while (!deflater.finished()) {
+            int count = deflater.deflate(buffer);
+            out.write(buffer, 0, count);
+        }
+        deflater.end();
+        return out.toByteArray();
+    }
+
+    private void applyLiveSettings() {
+        if (settings != null) {
+            protobuf.setMaxRecursion(settings.maxDepth());
+        }
+    }
+
+    private byte[] toPrettyBytes(JsonNode node) {
+        try {
+            ObjectMapper mapper = settings != null && !settings.prettyJson() ? COMPACT_JSON : JSON;
+            return mapper.writeValueAsBytes(node);
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException(ex);
         }

@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -23,6 +24,7 @@ import java.util.stream.Stream;
 final class SchemaRegistry {
     private final Map<String, SchemaMessage> messages = new HashMap<>();
     private final Map<String, SchemaMethod> methods = new HashMap<>();
+    private final Map<String, SchemaEnum> enums = new HashMap<>();
 
     Optional<SchemaMessage> message(String typeName) {
         String normalized = normalizeType(typeName);
@@ -44,26 +46,55 @@ final class SchemaRegistry {
         return message(response ? method.responseType() : method.requestType());
     }
 
+    Optional<String> enumName(String enumType, long value) {
+        SchemaEnum schemaEnum = enums.get(normalizeType(enumType));
+        if (schemaEnum == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(schemaEnum.nameOf(value));
+    }
+
+    OptionalLong enumValue(String enumType, String name) {
+        SchemaEnum schemaEnum = enums.get(normalizeType(enumType));
+        if (schemaEnum == null) {
+            return OptionalLong.empty();
+        }
+        Integer number = schemaEnum.numberOf(name);
+        return number == null ? OptionalLong.empty() : OptionalLong.of(number);
+    }
+
+    int messageCount() {
+        return messages.size();
+    }
+
+    int methodCount() {
+        return methods.size();
+    }
+
     void reload(ExtensionSettings settings) {
         messages.clear();
         methods.clear();
+        enums.clear();
         loadProtoPaths(settings.protoPaths());
         String target = settings.reflectionTarget();
         if (!target.isBlank()) {
-            Optional<DescriptorProtos.FileDescriptorSet> reflected = new ReflectionSchemaLoader().load(target, settings.reflectionTls());
-            if (reflected.isPresent()) {
-                addDescriptor(reflected.get());
-            }
+            Optional<DescriptorProtos.FileDescriptorSet> reflected = new ReflectionSchemaLoader()
+                    .load(target, settings.reflectionTls(), settings.reflectionTimeoutSeconds());
+            reflected.ifPresent(this::addDescriptor);
         }
     }
 
     void addProtoSource(String source) {
         ProtoFile parsed = ProtoFile.parse(source);
-        for (ProtoMessage message : parsed.messages) {
-            addMessage(parsed.packageName, parsed.enums, message);
+        Set<String> enumNames = parsed.enumNames();
+        for (ProtoEnum protoEnum : parsed.enums()) {
+            registerEnum(parsed.packageName(), protoEnum);
         }
-        for (ProtoService service : parsed.services) {
-            addService(parsed.packageName, service);
+        for (ProtoMessage message : parsed.messages()) {
+            addMessage(parsed.packageName(), enumNames, message);
+        }
+        for (ProtoService service : parsed.services()) {
+            addService(parsed.packageName(), service);
         }
     }
 
@@ -133,12 +164,25 @@ final class SchemaRegistry {
     }
 
     private void addFileDescriptor(Descriptors.FileDescriptor file) {
+        for (Descriptors.EnumDescriptor enumType : file.getEnumTypes()) {
+            addDescriptorEnum(enumType);
+        }
         for (Descriptors.Descriptor descriptor : file.getMessageTypes()) {
             addDescriptorMessage(descriptor);
         }
         for (Descriptors.ServiceDescriptor service : file.getServices()) {
             addDescriptorService(service);
         }
+    }
+
+    private void addDescriptorEnum(Descriptors.EnumDescriptor descriptor) {
+        Map<Integer, String> byNumber = new LinkedHashMap<>();
+        Map<String, Integer> byName = new LinkedHashMap<>();
+        for (Descriptors.EnumValueDescriptor value : descriptor.getValues()) {
+            byNumber.putIfAbsent(value.getNumber(), value.getName());
+            byName.put(value.getName(), value.getNumber());
+        }
+        enums.put(descriptor.getFullName(), new SchemaEnum(descriptor.getFullName(), Map.copyOf(byNumber), Map.copyOf(byName)));
     }
 
     private void addDescriptorMessage(Descriptors.Descriptor descriptor) {
@@ -151,6 +195,7 @@ final class SchemaRegistry {
             String enumType = field.getJavaType() == Descriptors.FieldDescriptor.JavaType.ENUM
                     ? field.getEnumType().getFullName()
                     : "";
+            Descriptors.OneofDescriptor oneof = field.getRealContainingOneof();
             SchemaField schemaField = new SchemaField(
                     field.getNumber(),
                     field.getName(),
@@ -158,12 +203,17 @@ final class SchemaRegistry {
                     messageType,
                     enumType,
                     field.isRepeated(),
-                    field.isPacked());
+                    field.isPacked(),
+                    oneof == null ? "" : oneof.getName(),
+                    field.isMapField());
             byNumber.put(schemaField.number(), schemaField);
             byName.put(schemaField.name(), schemaField);
         }
         SchemaMessage message = new SchemaMessage(descriptor.getFullName(), Map.copyOf(byNumber), Map.copyOf(byName));
         messages.put(message.typeName(), message);
+        for (Descriptors.EnumDescriptor nestedEnum : descriptor.getEnumTypes()) {
+            addDescriptorEnum(nestedEnum);
+        }
         for (Descriptors.Descriptor nested : descriptor.getNestedTypes()) {
             addDescriptorMessage(nested);
         }
@@ -176,34 +226,77 @@ final class SchemaRegistry {
         }
     }
 
+    private void registerEnum(String packageName, ProtoEnum protoEnum) {
+        String qualified = packageName.isBlank() ? protoEnum.name() : packageName + "." + protoEnum.name();
+        Map<String, Integer> byName = new LinkedHashMap<>();
+        protoEnum.values().forEach((number, name) -> byName.putIfAbsent(name, number));
+        enums.put(qualified, new SchemaEnum(qualified, Map.copyOf(protoEnum.values()), Map.copyOf(byName)));
+    }
+
     private void addMessage(String packageName, Set<String> enumNames, ProtoMessage protoMessage) {
-        String typeName = packageName.isBlank() ? protoMessage.name : packageName + "." + protoMessage.name;
+        String typeName = packageName.isBlank() ? protoMessage.name() : packageName + "." + protoMessage.name();
         Map<Integer, SchemaField> byNumber = new LinkedHashMap<>();
         Map<String, SchemaField> byName = new LinkedHashMap<>();
-        for (ProtoField field : protoMessage.fields) {
-            String normalizedType = normalizeProtoType(packageName, field.type);
-            boolean enumField = enumNames.contains(field.type) || enumNames.contains(normalizedType);
-            boolean message = !isScalar(field.type) && !enumField;
-            SchemaField schemaField = new SchemaField(
-                    field.number,
-                    field.name,
-                    field.type,
-                    message ? normalizedType : "",
-                    enumField ? normalizedType : "",
-                    field.repeated,
-                    field.packed);
+        for (ProtoField field : protoMessage.fields()) {
+            SchemaField schemaField = field.map()
+                    ? mapSchemaField(packageName, enumNames, typeName, field)
+                    : scalarOrMessageSchemaField(packageName, enumNames, field);
             byNumber.put(schemaField.number(), schemaField);
             byName.put(schemaField.name(), schemaField);
         }
         messages.put(typeName, new SchemaMessage(typeName, Map.copyOf(byNumber), Map.copyOf(byName)));
     }
 
+    private SchemaField scalarOrMessageSchemaField(String packageName, Set<String> enumNames, ProtoField field) {
+        String normalizedType = normalizeProtoType(packageName, field.type());
+        boolean enumField = enumNames.contains(field.type()) || enumNames.contains(normalizedType);
+        boolean message = !isScalar(field.type()) && !enumField;
+        return new SchemaField(
+                field.number(),
+                field.name(),
+                field.type(),
+                message ? normalizedType : "",
+                enumField ? normalizedType : "",
+                field.repeated(),
+                field.packed(),
+                field.oneof(),
+                false);
+    }
+
+    private SchemaField mapSchemaField(String packageName, Set<String> enumNames, String containingType, ProtoField field) {
+        String entryTypeName = containingType + "." + toPascalCase(field.name()) + "Entry";
+        registerMapEntry(packageName, enumNames, entryTypeName, field.mapKeyType(), field.mapValueType());
+        return new SchemaField(
+                field.number(),
+                field.name(),
+                "message",
+                entryTypeName,
+                "",
+                true,
+                false,
+                field.oneof(),
+                true);
+    }
+
+    private void registerMapEntry(String packageName, Set<String> enumNames, String entryTypeName, String keyType, String valueType) {
+        String normalizedValueType = normalizeProtoType(packageName, valueType);
+        boolean valueEnum = enumNames.contains(valueType) || enumNames.contains(normalizedValueType);
+        boolean valueMessage = !isScalar(valueType) && !valueEnum;
+        SchemaField keyField = new SchemaField(1, "key", keyType, "", "", false, false, "", false);
+        SchemaField valueField = new SchemaField(
+                2, "value", valueType,
+                valueMessage ? normalizedValueType : "",
+                valueEnum ? normalizedValueType : "",
+                false, false, "", false);
+        messages.put(entryTypeName, new SchemaMessage(entryTypeName, Map.of(1, keyField, 2, valueField), Map.of("key", keyField, "value", valueField)));
+    }
+
     private void addService(String packageName, ProtoService protoService) {
-        String serviceName = packageName.isBlank() ? protoService.name : packageName + "." + protoService.name;
-        for (ProtoRpc rpc : protoService.rpcs) {
-            String requestType = normalizeProtoType(packageName, rpc.requestType);
-            String responseType = normalizeProtoType(packageName, rpc.responseType);
-            String path = "/" + serviceName + "/" + rpc.name;
+        String serviceName = packageName.isBlank() ? protoService.name() : packageName + "." + protoService.name();
+        for (ProtoRpc rpc : protoService.rpcs()) {
+            String requestType = normalizeProtoType(packageName, rpc.requestType());
+            String responseType = normalizeProtoType(packageName, rpc.responseType());
+            String path = "/" + serviceName + "/" + rpc.name();
             methods.put(path, new SchemaMethod(path, requestType, responseType));
         }
     }
@@ -240,32 +333,81 @@ final class SchemaRegistry {
         };
     }
 
-    private record ProtoFile(String packageName, Set<String> enums, List<ProtoMessage> messages, List<ProtoService> services) {
+    private static String toPascalCase(String snakeCase) {
+        StringBuilder result = new StringBuilder();
+        boolean upperNext = true;
+        for (char c : snakeCase.toCharArray()) {
+            if (c == '_') {
+                upperNext = true;
+                continue;
+            }
+            result.append(upperNext ? Character.toUpperCase(c) : c);
+            upperNext = false;
+        }
+        return result.toString();
+    }
+
+    private static String blank(String text, int start, int end) {
+        return text.substring(0, start) + " ".repeat(end - start) + text.substring(end);
+    }
+
+    private record ProtoFile(String packageName, List<ProtoEnum> enums, List<ProtoMessage> messages, List<ProtoService> services) {
         private static final Pattern PACKAGE = Pattern.compile("\\bpackage\\s+([A-Za-z_][A-Za-z0-9_.]*)\\s*;");
+        private static final Pattern ENUM = Pattern.compile("\\benum\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{");
+        private static final Pattern ENUM_VALUE = Pattern.compile("\\b([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(-?\\d+)");
+        private static final Pattern MESSAGE = Pattern.compile("\\bmessage\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{");
+        private static final Pattern SERVICE = Pattern.compile("\\bservice\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{");
+        private static final Pattern RPC = Pattern.compile(
+                "\\brpc\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s*\\)\\s*returns\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s*\\)");
+        private static final Pattern ONEOF = Pattern.compile("\\boneof\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{");
+        private static final Pattern MAP_FIELD = Pattern.compile(
+                "\\bmap\\s*<\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s*,\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s*>\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(\\d+)[^;]*;");
+        private static final Pattern FIELD = Pattern.compile(
+                "\\b(optional|required|repeated)?\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(\\d+)([^;]*);");
 
         static ProtoFile parse(String source) {
             String stripped = stripComments(source);
             Matcher packageMatcher = PACKAGE.matcher(stripped);
             String packageName = packageMatcher.find() ? packageMatcher.group(1) : "";
-            return new ProtoFile(packageName, parseEnums(packageName, stripped), parseMessages(stripped), parseServices(stripped));
+            return new ProtoFile(packageName, parseEnums(stripped), parseMessages(stripped), parseServices(stripped));
         }
 
-        private static Set<String> parseEnums(String packageName, String source) {
-            Set<String> enums = new HashSet<>();
-            Matcher matcher = Pattern.compile("\\benum\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{").matcher(source);
-            while (matcher.find()) {
-                String name = matcher.group(1);
-                enums.add(name);
+        Set<String> enumNames() {
+            Set<String> names = new HashSet<>();
+            for (ProtoEnum protoEnum : enums) {
+                names.add(protoEnum.name());
                 if (!packageName.isBlank()) {
-                    enums.add(packageName + "." + name);
+                    names.add(packageName + "." + protoEnum.name());
+                }
+            }
+            return names;
+        }
+
+        private static List<ProtoEnum> parseEnums(String source) {
+            List<ProtoEnum> enums = new ArrayList<>();
+            Matcher matcher = ENUM.matcher(source);
+            while (matcher.find()) {
+                int bodyStart = matcher.end();
+                int bodyEnd = findBlockEnd(source, bodyStart - 1);
+                if (bodyEnd > bodyStart) {
+                    enums.add(new ProtoEnum(matcher.group(1), parseEnumValues(source.substring(bodyStart, bodyEnd))));
                 }
             }
             return enums;
         }
 
+        private static Map<Integer, String> parseEnumValues(String body) {
+            Map<Integer, String> values = new LinkedHashMap<>();
+            Matcher matcher = ENUM_VALUE.matcher(body);
+            while (matcher.find()) {
+                values.putIfAbsent(Integer.parseInt(matcher.group(2)), matcher.group(1));
+            }
+            return values;
+        }
+
         private static List<ProtoMessage> parseMessages(String source) {
             List<ProtoMessage> messages = new ArrayList<>();
-            Matcher matcher = Pattern.compile("\\bmessage\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{").matcher(source);
+            Matcher matcher = MESSAGE.matcher(source);
             while (matcher.find()) {
                 int bodyStart = matcher.end();
                 int bodyEnd = findBlockEnd(source, bodyStart - 1);
@@ -278,7 +420,7 @@ final class SchemaRegistry {
 
         private static List<ProtoService> parseServices(String source) {
             List<ProtoService> services = new ArrayList<>();
-            Matcher matcher = Pattern.compile("\\bservice\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{").matcher(source);
+            Matcher matcher = SERVICE.matcher(source);
             while (matcher.find()) {
                 int bodyStart = matcher.end();
                 int bodyEnd = findBlockEnd(source, bodyStart - 1);
@@ -291,9 +433,7 @@ final class SchemaRegistry {
 
         private static List<ProtoRpc> parseRpcs(String body) {
             List<ProtoRpc> rpcs = new ArrayList<>();
-            Pattern rpcPattern = Pattern.compile(
-                    "\\brpc\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s*\\)\\s*returns\\s*\\(\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s*\\)");
-            Matcher matcher = rpcPattern.matcher(body);
+            Matcher matcher = RPC.matcher(body);
             while (matcher.find()) {
                 rpcs.add(new ProtoRpc(matcher.group(1), matcher.group(2), matcher.group(3)));
             }
@@ -302,13 +442,43 @@ final class SchemaRegistry {
 
         private static List<ProtoField> parseFields(String body) {
             List<ProtoField> fields = new ArrayList<>();
-            Pattern fieldPattern = Pattern.compile(
-                    "\\b(optional|required|repeated)?\\s*([A-Za-z_][A-Za-z0-9_.]*)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(\\d+)([^;]*);");
-            Matcher matcher = fieldPattern.matcher(body);
+            String working = body;
+
+            while (true) {
+                Matcher matcher = ONEOF.matcher(working);
+                if (!matcher.find()) {
+                    break;
+                }
+                int innerStart = matcher.end();
+                int innerEnd = findBlockEnd(working, innerStart - 1);
+                if (innerEnd <= innerStart) {
+                    working = blank(working, matcher.start(), matcher.end());
+                    continue;
+                }
+                fields.addAll(parsePlainFields(working.substring(innerStart, innerEnd), matcher.group(1)));
+                working = blank(working, matcher.start(), innerEnd + 1);
+            }
+
+            while (true) {
+                Matcher matcher = MAP_FIELD.matcher(working);
+                if (!matcher.find()) {
+                    break;
+                }
+                fields.add(ProtoField.mapField(matcher.group(3), Integer.parseInt(matcher.group(4)), matcher.group(1), matcher.group(2)));
+                working = blank(working, matcher.start(), matcher.end());
+            }
+
+            fields.addAll(parsePlainFields(working, ""));
+            return fields;
+        }
+
+        private static List<ProtoField> parsePlainFields(String body, String oneofName) {
+            List<ProtoField> fields = new ArrayList<>();
+            Matcher matcher = FIELD.matcher(body);
             while (matcher.find()) {
                 boolean repeated = "repeated".equals(matcher.group(1));
                 boolean packed = matcher.group(5).contains("packed") && matcher.group(5).contains("true");
-                fields.add(new ProtoField(matcher.group(3), matcher.group(2), Integer.parseInt(matcher.group(4)), repeated, packed));
+                fields.add(new ProtoField(matcher.group(3), matcher.group(2), Integer.parseInt(matcher.group(4)), repeated, packed, oneofName));
             }
             return fields;
         }
@@ -334,10 +504,30 @@ final class SchemaRegistry {
         }
     }
 
+    private record ProtoEnum(String name, Map<Integer, String> values) {
+    }
+
     private record ProtoMessage(String name, List<ProtoField> fields) {
     }
 
-    private record ProtoField(String name, String type, int number, boolean repeated, boolean packed) {
+    private record ProtoField(
+            String name,
+            String type,
+            int number,
+            boolean repeated,
+            boolean packed,
+            String oneof,
+            boolean map,
+            String mapKeyType,
+            String mapValueType
+    ) {
+        private ProtoField(String name, String type, int number, boolean repeated, boolean packed, String oneof) {
+            this(name, type, number, repeated, packed, oneof, false, "", "");
+        }
+
+        static ProtoField mapField(String name, int number, String keyType, String valueType) {
+            return new ProtoField(name, "", number, false, false, "", true, keyType, valueType);
+        }
     }
 
     private record ProtoService(String name, List<ProtoRpc> rpcs) {

@@ -58,4 +58,8 @@ record HttpHeaders(String contentType, String grpcEncoding, String grpcPath, boo
     boolean isGzipEncoded() {
         return grpcEncoding.contains("gzip");
     }
+
+    boolean isDeflateEncoded() {
+        return grpcEncoding.contains("deflate");
+    }
 }
