@@ -78,6 +78,10 @@ final class GrpcTranscoder {
         if (mode == ExtensionSettings.RawDetection.STRICT && !hasLikelyBinaryProtobufShape(body)) {
             return false;
         }
+        long maxBytes = settings == null ? 1_048_576L : settings.maxRawDetectionBytes();
+        if (body.length > maxBytes) {
+            return false;
+        }
         return protobuf.looksLikeProtobuf(body);
     }
 
@@ -207,12 +211,25 @@ final class GrpcTranscoder {
         String format = detectFormat(headers);
         byte[] transportBody = body;
         if ("grpc-web-text".equals(format)) {
-            transportBody = Base64.getMimeDecoder().decode(new String(body, StandardCharsets.US_ASCII));
+            transportBody = decodeBase64Lenient(body);
         }
         if ("grpc".equals(format) || "grpc-web".equals(format) || "grpc-web-text".equals(format)) {
             return decodeFrames(format, transportBody, headers);
         }
         return new Envelope("protobuf", List.of(new GrpcMessage(false, body)), List.of());
+    }
+
+    private static byte[] decodeBase64Lenient(byte[] body) {
+        // Base64.getMimeDecoder() silently *ignores* characters outside the
+        // standard alphabet (RFC 2045 leniency) instead of rejecting them, so
+        // it cannot be used to detect and fall back from URL-safe input: it
+        // would silently corrupt data rather than throw. Normalize first
+        // (URL-safe alphabet, padding) and always decode with the strict
+        // standard decoder so malformed input still fails loudly.
+        String text = new String(body, StandardCharsets.US_ASCII);
+        String normalized = text.trim().replace('-', '+').replace('_', '/').replaceAll("\\s+", "");
+        int padding = (4 - normalized.length() % 4) % 4;
+        return Base64.getDecoder().decode(normalized + "=".repeat(padding));
     }
 
     private String detectFormat(HttpHeaders headers) {

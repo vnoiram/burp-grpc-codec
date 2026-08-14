@@ -20,6 +20,7 @@ final class ExtensionSettings {
     private static final String MAX_DEPTH = "Max message nesting depth";
     private static final String AUTO_HIGHLIGHT = "Auto-highlight gRPC/protobuf traffic";
     private static final String AUTO_SELECT_TAB = "Auto-select gRPC Codec tab";
+    private static final String MAX_RAW_DETECTION_BYTES = "Max raw-detection body size (bytes)";
 
     private final PersistedObject data;
     private final SettingsPanelWithData panel;
@@ -59,6 +60,9 @@ final class ExtensionSettings {
                         "Automatically switch to the gRPC Codec tab when a message is decoded. "
                                 + "Relies on Burp's internal Swing tab structure and may stop working in a future Burp release.",
                         false))
+                .withSetting(SettingsPanelSetting.stringSetting(MAX_RAW_DETECTION_BYTES,
+                        "Skip the schema-less raw-detection heuristic (broad/strict modes) for bodies "
+                                + "larger than this many bytes. Does not affect declared gRPC/protobuf Content-Types."))
                 .build();
         loadDefaults();
     }
@@ -137,6 +141,15 @@ final class ExtensionSettings {
         }
     }
 
+    long maxRawDetectionBytes() {
+        try {
+            long bytes = Long.parseLong(value(MAX_RAW_DETECTION_BYTES));
+            return bytes > 0 ? bytes : 1_048_576L;
+        } catch (NumberFormatException ex) {
+            return 1_048_576L;
+        }
+    }
+
     void saveSnapshot() {
         data.setString(PROTO_PATHS, protoPaths());
         data.setString(REFLECTION_TARGET, reflectionTarget());
@@ -150,6 +163,7 @@ final class ExtensionSettings {
         data.setString(MAX_DEPTH, value(MAX_DEPTH));
         data.setBoolean(AUTO_HIGHLIGHT, autoHighlight());
         data.setBoolean(AUTO_SELECT_TAB, autoSelectTab());
+        data.setString(MAX_RAW_DETECTION_BYTES, value(MAX_RAW_DETECTION_BYTES));
     }
 
     private void loadDefaults() {
@@ -161,6 +175,7 @@ final class ExtensionSettings {
         setDefault(RAW_DETECTION, "broad");
         setDefault(JSON_OUTPUT, "pretty");
         setDefault(MAX_DEPTH, "24");
+        setDefault(MAX_RAW_DETECTION_BYTES, "1048576");
         Boolean tls = data.getBoolean(REFLECTION_TLS);
         if (tls == null) {
             data.setBoolean(REFLECTION_TLS, false);

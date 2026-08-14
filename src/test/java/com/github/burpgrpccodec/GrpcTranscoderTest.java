@@ -52,6 +52,19 @@ class GrpcTranscoderTest {
     }
 
     @Test
+    void decodesUrlSafeGrpcWebText() throws Exception {
+        byte[] framed = {0, 0, 0, 0, 4, 0x0a, 0x02, 0x20, 0x3e};
+        String urlSafe = Base64.getEncoder().encodeToString(framed).replace('+', '-').replace('/', '_');
+        byte[] body = urlSafe.getBytes(StandardCharsets.US_ASCII);
+
+        GrpcTranscoder transcoder = new GrpcTranscoder();
+        byte[] json = transcoder.decode(body, new HttpHeaders("application/grpc-web-text"));
+        JsonNode root = JSON.readTree(json);
+
+        assertEquals(" >", root.get("messages").get(0).get("message").get("f1").get("value").asText());
+    }
+
+    @Test
     void rejectsTruncatedGrpcFrameWithLargeDeclaredLength() {
         byte[] body = new byte[] {
                 0,
@@ -157,6 +170,21 @@ class GrpcTranscoderTest {
         assertTrue(transcoder.isCandidate(protobufShaped, new HttpHeaders("text/plain")));
         assertFalse(transcoder.isDeclaredGrpcOrProtobuf(new HttpHeaders("text/plain")));
         assertTrue(transcoder.isDeclaredGrpcOrProtobuf(new HttpHeaders("application/grpc")));
+    }
+
+    @Test
+    void skipsRawDetectionHeuristicForOversizedBodies() {
+        byte[] pair = {0x08, 0x01};
+        int repeats = (1_048_576 / pair.length) + 1;
+        byte[] oversized = new byte[pair.length * repeats];
+        for (int i = 0; i < repeats; i++) {
+            System.arraycopy(pair, 0, oversized, i * pair.length, pair.length);
+        }
+
+        assertTrue(new ProtobufCodec().looksLikeProtobuf(oversized));
+
+        GrpcTranscoder transcoder = new GrpcTranscoder();
+        assertFalse(transcoder.isCandidate(oversized, new HttpHeaders("text/plain")));
     }
 
     @Test
