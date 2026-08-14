@@ -1,6 +1,7 @@
 package com.github.burpgrpccodec;
 
 import burp.api.montoya.MontoyaApi;
+import burp.api.montoya.core.ByteArray;
 import burp.api.montoya.http.message.HttpRequestResponse;
 import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.api.montoya.http.message.responses.HttpResponse;
@@ -12,6 +13,7 @@ import java.awt.Component;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -36,7 +38,9 @@ final class GrpcContextMenuProvider implements ContextMenuItemsProvider {
         logItem.addActionListener(actionEvent -> logDecoded(targets));
         JMenuItem copyItem = new JMenuItem("Copy decoded gRPC/protobuf body to clipboard");
         copyItem.addActionListener(actionEvent -> copyDecoded(targets));
-        return List.of(logItem, copyItem);
+        JMenuItem comparerItem = new JMenuItem("Send decoded gRPC/protobuf bodies to Comparer");
+        comparerItem.addActionListener(actionEvent -> sendToComparer(targets));
+        return List.of(logItem, copyItem, comparerItem);
     }
 
     private void logDecoded(List<HttpRequestResponse> targets) {
@@ -66,6 +70,21 @@ final class GrpcContextMenuProvider implements ContextMenuItemsProvider {
             }
         }
         api.logging().logToOutput("gRPC Codec: no gRPC/protobuf request or response body found in selection.");
+    }
+
+    private void sendToComparer(List<HttpRequestResponse> targets) {
+        List<ByteArray> decodedBodies = new ArrayList<>();
+        for (HttpRequestResponse requestResponse : targets) {
+            decodeRequestBody(requestResponse.request())
+                    .ifPresent(json -> decodedBodies.add(ByteArray.byteArray(json)));
+            decodeResponseBody(requestResponse.response(), requestResponse.request())
+                    .ifPresent(json -> decodedBodies.add(ByteArray.byteArray(json)));
+        }
+        if (decodedBodies.isEmpty()) {
+            api.logging().logToOutput("gRPC Codec: no gRPC/protobuf request or response body found in selection.");
+            return;
+        }
+        api.comparer().sendToComparer(decodedBodies.toArray(ByteArray[]::new));
     }
 
     private static String requestUrl(HttpRequestResponse requestResponse) {
