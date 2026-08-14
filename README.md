@@ -26,11 +26,26 @@ back into the original wire format when Burp sends the message.
   when service definitions are available.
 - Decodes and re-encodes packed repeated scalar fields when schema metadata is
   available.
-- Decompresses and recompresses gzip-compressed gRPC messages when
-  `grpc-encoding: gzip` is present.
+- Resolves protobuf `enum` values to their symbolic name and accepts either
+  the name or the number back when editing.
+- Marks fields that belong to a `oneof` and fields that are protobuf `map<K, V>`
+  entries in the decoded JSON.
+- Adds a read-only convenience view for `google.protobuf.Any` (resolves the
+  embedded message by `type_url` against the schema registry) and for
+  `google.protobuf.Timestamp` / `Duration` (ISO-8601 / seconds). The raw
+  fields remain authoritative for re-encoding.
+- Accepts schema field names in place of `f<number>` keys when editing JSON,
+  as long as a schema is available.
+- Decompresses and recompresses gzip- or deflate-compressed gRPC messages when
+  `grpc-encoding: gzip` or `grpc-encoding: deflate` is present.
 - Preserves repeated fields and unknown numeric field numbers.
 - Re-encodes edited JSON back into protobuf and restores the original transport
   envelope.
+- Adds a "Log decoded gRPC/protobuf body" context menu item that prints
+  decoded JSON to the extension output for the selected message(s), without
+  needing to open the editor tab.
+- Optionally highlights and annotates Proxy history responses detected as
+  gRPC/protobuf (off by default; see Settings).
 
 ## Build
 
@@ -53,8 +68,14 @@ Open Burp's settings and search for `Burp gRPC Codec` to configure:
 
 - Local `.proto` files or directories, separated by commas.
 - A gRPC Server Reflection target as `host:port`, with optional TLS.
+- gRPC Server Reflection request timeout, in seconds (default `5`).
 - Default request and response message types for schema-aware decoding.
 - Raw protobuf detection mode: `broad`, `strict`, or `off`.
+- Editor JSON output style: `pretty` (default) or `compact`.
+- Verbose logging: log schema reload and decode/encode activity to the
+  extension output (off by default).
+- Maximum nested message depth to decode (default `24`).
+- Auto-highlight gRPC/protobuf traffic in Proxy history (off by default).
 
 ## JSON Format
 
@@ -95,6 +116,26 @@ Supported value types:
 When a field appears multiple times, its value becomes an array of typed field
 objects.
 
+With schema metadata, fields can also carry:
+
+- `enumName`: the symbolic name for an `enum` value (e.g. `"ACTIVE"`). Editing
+  `enumName` re-resolves to the matching number on encode; if it can't be
+  resolved, the numeric `value` is used instead.
+- `oneof`: the name of the `oneof` the field belongs to.
+- `map`: `true` when the field is a protobuf `map<K, V>`; each entry decodes
+  as a nested message with `f1` (key) and `f2` (value).
+- `anyType` / `anyValue`: for `google.protobuf.Any` fields, the resolved
+  message type and its decoded contents, when the type is known to the
+  schema registry. Read-only; edit the raw `type_url`/`value` fields (`f1`/
+  `f2` under `value`) to change what gets re-encoded.
+- `readable`: for `google.protobuf.Timestamp` (ISO-8601) and
+  `google.protobuf.Duration` (`"<seconds>s"`). Read-only; edit the raw
+  `seconds`/`nanos` fields (`f1`/`f2` under `value`) to change what gets
+  re-encoded.
+
+When a schema is available, JSON keys may also use the schema's field name
+instead of `f<number>` (e.g. `"greeting"` instead of `"f1"`).
+
 ## Limits
 
 Schema-less protobuf decoding cannot know original semantic types. For example,
@@ -103,5 +144,14 @@ the same varint may represent `int32`, `uint64`, `bool`, or an enum. Configure
 metadata is needed.
 
 Server Reflection currently supports plain/TLS `host:port` targets without
-custom authentication headers. If gzip decompression fails, compressed message
-bytes are preserved as base64.
+custom authentication headers. If gzip or deflate decompression fails,
+compressed message bytes are preserved as base64.
+
+The custom `.proto` text parser does not resolve `import` statements, so
+well-known types (`google.protobuf.Any`/`Timestamp`/`Duration`) are only
+recognized when a field references them by their fully-qualified name
+directly (e.g. `google.protobuf.Timestamp field = 1;`); the message itself
+does not need to be defined. Nested `message` declarations (a `message`
+inside another `message`) are flattened and are not scoped to their
+enclosing type; prefer top-level message declarations, or use gRPC Server
+Reflection for accurate nested-type resolution.

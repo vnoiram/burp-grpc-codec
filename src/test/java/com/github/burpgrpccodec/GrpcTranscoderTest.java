@@ -130,11 +130,43 @@ class GrpcTranscoderTest {
         assertEquals("response_name", response.get("messages").get(0).get("message").get("f1").get("name").asText());
     }
 
+    @Test
+    void decodesAndEncodesDeflateCompressedGrpcMessage() throws Exception {
+        byte[] protobuf = new byte[] {0x0a, 0x02, 'o', 'k'};
+        byte[] compressed = deflate(protobuf);
+        byte[] body = new byte[5 + compressed.length];
+        body[0] = 1;
+        body[4] = (byte) compressed.length;
+        System.arraycopy(compressed, 0, body, 5, compressed.length);
+
+        GrpcTranscoder transcoder = new GrpcTranscoder();
+        byte[] json = transcoder.decode(body, new HttpHeaders("application/grpc", "deflate"));
+
+        JsonNode root = JSON.readTree(json);
+        assertEquals("deflate", root.get("messages").get(0).get("compression").asText());
+        assertEquals("ok", root.get("messages").get(0).get("message").get("f1").get("value").asText());
+        assertArrayEquals(body, transcoder.encode(json, new HttpHeaders("application/grpc", "deflate")));
+    }
+
     private static byte[] gzip(byte[] bytes) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (GZIPOutputStream gzip = new GZIPOutputStream(out)) {
             gzip.write(bytes);
         }
+        return out.toByteArray();
+    }
+
+    private static byte[] deflate(byte[] bytes) {
+        java.util.zip.Deflater deflater = new java.util.zip.Deflater();
+        deflater.setInput(bytes);
+        deflater.finish();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[4096];
+        while (!deflater.finished()) {
+            int count = deflater.deflate(buffer);
+            out.write(buffer, 0, count);
+        }
+        deflater.end();
         return out.toByteArray();
     }
 }
