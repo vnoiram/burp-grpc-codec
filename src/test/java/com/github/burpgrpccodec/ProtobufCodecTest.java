@@ -50,6 +50,37 @@ class ProtobufCodecTest {
 
         assertEquals("bytes", decoded.get("f1").get("type").asText());
         assertEquals(Base64.getEncoder().encodeToString(new byte[] {0, 1, 2}), decoded.get("f1").get("value").asText());
+        assertEquals("000102", decoded.get("f1").get("hex").asText());
+    }
+
+    @Test
+    void flagsJwtShapedStringsWithAHint() {
+        String jwt = "REDACTED_TEST_JWT";
+        byte[] protobuf = wrapMessage(jwt.getBytes(StandardCharsets.UTF_8));
+
+        ObjectNode decoded = new ProtobufCodec().decodeMessage(protobuf);
+
+        assertEquals("jwt", decoded.get("f1").get("hint").asText());
+    }
+
+    @Test
+    void doesNotFlagOrdinaryDottedStringsAsJwt() {
+        byte[] protobuf = wrapMessage("api.example.com".getBytes(StandardCharsets.UTF_8));
+
+        ObjectNode decoded = new ProtobufCodec().decodeMessage(protobuf);
+
+        assertTrue(decoded.get("f1").path("hint").isMissingNode());
+    }
+
+    @Test
+    void flagsSensitiveSchemaFieldNamesWithAHint() {
+        SchemaField secretField = new SchemaField(1, "api_key", "string", "", "", false, false);
+        SchemaMessage schema = new SchemaMessage("demo.Credentials", Map.of(1, secretField), Map.of("api_key", secretField));
+        byte[] protobuf = wrapMessage("s3cr3t".getBytes(StandardCharsets.UTF_8));
+
+        ObjectNode decoded = new ProtobufCodec(new SchemaRegistry()).decodeMessage(protobuf, schema);
+
+        assertEquals("possible-secret", decoded.get("f1").get("hint").asText());
     }
 
     @Test

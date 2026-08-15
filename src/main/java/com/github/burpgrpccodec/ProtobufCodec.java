@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -23,7 +24,15 @@ import java.util.regex.Pattern;
 
 final class ProtobufCodec {
     private static final JsonNodeFactory NODES = JsonNodeFactory.instance;
+    private static final HexFormat HEX = HexFormat.of();
     private static final Pattern FIELD_NAME = Pattern.compile("f[1-9][0-9]*");
+    // Three base64url segments of at least 10 chars each; the length floor keeps
+    // ordinary dotted strings (hostnames, paths) from being flagged as JWTs.
+    private static final Pattern JWT_PATTERN =
+            Pattern.compile("[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}");
+    private static final Pattern SENSITIVE_FIELD_NAME = Pattern.compile(
+            "(?i)(password|passwd|secret|token|api[_-]?key|apikey|authorization|"
+                    + "session[_-]?id|private[_-]?key|access[_-]?token|refresh[_-]?token)");
     private static final SchemaMessage ANY_ENVELOPE_SCHEMA = new SchemaMessage(
             "google.protobuf.Any",
             Map.of(
@@ -172,10 +181,10 @@ final class ProtobufCodec {
         if (schemaField != null) {
             switch (schemaField.protoType()) {
                 case "string" -> {
-                    return typed("string").put("value", new String(value, StandardCharsets.UTF_8));
+                    return stringNode(new String(value, StandardCharsets.UTF_8));
                 }
                 case "bytes" -> {
-                    return typed("bytes").put("value", Base64.getEncoder().encodeToString(value));
+                    return bytesNode(value);
                 }
                 default -> {
                     if (schemaField.repeated() && schemaField.packed()) {
@@ -197,7 +206,7 @@ final class ProtobufCodec {
         }
         String text = decodeUtf8(value);
         if (text != null && isReadableText(text)) {
-            return typed("string").put("value", text);
+            return stringNode(text);
         }
         if (value.length > 0) {
             try {
@@ -209,7 +218,42 @@ final class ProtobufCodec {
                 // Fall through to bytes when nested protobuf parsing is not coherent.
             }
         }
-        return typed("bytes").put("value", Base64.getEncoder().encodeToString(value));
+        return bytesNode(value);
+    }
+
+    private static ObjectNode stringNode(String text) {
+        ObjectNode node = typed("string").put("value", text);
+        valueHint(text).ifPresent(hint -> node.put("hint", hint));
+        return node;
+    }
+
+    private static ObjectNode bytesNode(byte[] value) {
+        return typed("bytes")
+                .put("value", Base64.getEncoder().encodeToString(value))
+                .put("hex", HEX.formatHex(value));
+    }
+
+    /**
+     * Best-effort, low-precision spotting of values worth a closer look
+     * during recon (currently just JWTs), not a security scanner. Segment
+     * length thresholds are chosen to avoid flagging ordinary dotted
+     * strings (hostnames, paths) as false positives.
+     */
+    private static Optional<String> valueHint(String text) {
+        if (JWT_PATTERN.matcher(text).matches()) {
+            return Optional.of("jwt");
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Best-effort flagging of field names that conventionally hold
+     * credentials, independent of the decoded value shape.
+     */
+    private static Optional<String> nameHint(String name) {
+        return name != null && SENSITIVE_FIELD_NAME.matcher(name).find()
+                ? Optional.of("possible-secret")
+                : Optional.empty();
     }
 
     private ArrayNode decodePacked(byte[] value, SchemaField schemaField) {
@@ -439,6 +483,9 @@ final class ProtobufCodec {
         }
         if (schemaField.map()) {
             object.put("map", true);
+        }
+        if (!object.has("hint")) {
+            nameHint(schemaField.name()).ifPresent(hint -> object.put("hint", hint));
         }
     }
 
