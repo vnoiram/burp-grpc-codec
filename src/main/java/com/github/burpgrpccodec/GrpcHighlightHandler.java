@@ -19,7 +19,18 @@ final class GrpcHighlightHandler implements HttpHandler {
 
     @Override
     public RequestToBeSentAction handleHttpRequestToBeSent(HttpRequestToBeSent requestToBeSent) {
-        return RequestToBeSentAction.continueWith(requestToBeSent);
+        if (!settings.autoHighlight()) {
+            return RequestToBeSentAction.continueWith(requestToBeSent);
+        }
+        Annotations annotations = requestToBeSent.annotations();
+        if (annotations.hasHighlightColor()) {
+            return RequestToBeSentAction.continueWith(requestToBeSent);
+        }
+        HttpHeaders headers = HttpHeaders.from(requestToBeSent);
+        if (!transcoder.isDeclaredGrpcOrProtobuf(headers)) {
+            return RequestToBeSentAction.continueWith(requestToBeSent);
+        }
+        return RequestToBeSentAction.continueWith(requestToBeSent, highlighted(annotations, headers));
     }
 
     @Override
@@ -35,10 +46,20 @@ final class GrpcHighlightHandler implements HttpHandler {
         if (!transcoder.isDeclaredGrpcOrProtobuf(headers)) {
             return ResponseReceivedAction.continueWith(responseReceived);
         }
+        return ResponseReceivedAction.continueWith(responseReceived, highlighted(annotations, headers));
+    }
+
+    private static Annotations highlighted(Annotations annotations, HttpHeaders headers) {
         Annotations updated = annotations.withHighlightColor(HighlightColor.GREEN);
         if (!annotations.hasNotes()) {
-            updated = updated.withNotes("gRPC/protobuf detected");
+            updated = updated.withNotes(noteFor(headers));
         }
-        return ResponseReceivedAction.continueWith(responseReceived, updated);
+        return updated;
+    }
+
+    private static String noteFor(HttpHeaders headers) {
+        return headers.grpcPath().isBlank()
+                ? "gRPC/protobuf detected"
+                : "gRPC/protobuf detected: " + headers.grpcPath();
     }
 }
