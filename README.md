@@ -64,6 +64,23 @@ back into the original wire format when Burp sends the message.
   decoding `grpc-web-text` bodies.
 - Skips the schema-less raw-detection heuristic for bodies larger than a
   configurable size (default 1 MiB), to bound its cost on large responses.
+- Adds a "Copy as grpcurl command" context menu item for gRPC/grpc-web
+  requests, producing a runnable `grpcurl` invocation (`-plaintext` flag,
+  target `host:port`, `pkg.Service/Method` path, and a best-effort plain-JSON
+  `-d` payload from the decoded body) for replaying the call outside Burp.
+- Adds a "Generate .proto stub from decoded body" context menu item, which
+  reverse-engineers a best-effort `.proto` message definition (with inferred
+  field types and nested messages) from a decoded request or response body
+  and copies it to the clipboard, for traffic seen without .proto files,
+  a FileDescriptorSet, or Server Reflection.
+- Adds a filter box to the "gRPC Methods" suite tab, to narrow the discovered
+  method list by host or path substring.
+- Adds an "Export CSV..." button to the "gRPC Methods" suite tab, to save the
+  (filtered) discovered method list as a CSV file (host, path, observation
+  count).
+- Persists the "gRPC Methods" discovery log across Burp restarts (per Burp
+  project), so passively observed service/method paths survive reloading the
+  extension or Burp itself.
 
 ## Build
 
