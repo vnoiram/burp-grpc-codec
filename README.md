@@ -106,6 +106,13 @@ back into the original wire format when Burp sends the message.
   button always exports the full schema regardless of the filter).
 - Adds an "Export JSON..." button to the "gRPC Methods" suite tab, alongside
   the existing CSV export, for the (filtered) discovered method list.
+- Renders the "gRPC Methods" and "gRPC Schema" suite tabs as sortable tables
+  (click a column header to sort) instead of a plain text dump; "Copy to
+  clipboard" copies rows in the table's current on-screen sort order.
+- Shows an inline status line under the `gRPC Codec` editor when an edited
+  message fails to re-encode (e.g. invalid JSON), instead of only logging
+  the failure to the extension output; the editor falls back to sending the
+  previously decoded body either way, but this makes that fallback visible.
 
 ## Build
 
