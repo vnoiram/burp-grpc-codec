@@ -203,6 +203,21 @@ class GrpcTranscoderTest {
         assertEquals("not found", root.get("grpcMessage").asText());
     }
 
+    @Test
+    void exposesGrpcTimeoutFromRequestHeaders() throws Exception {
+        byte[] body = new byte[] {
+                0, 0, 0, 0, 4,
+                0x0a, 0x02, 'o', 'k'
+        };
+        GrpcTranscoder transcoder = new GrpcTranscoder();
+
+        byte[] json = transcoder.decode(body,
+                new HttpHeaders("application/grpc", "", "/demo.Greeter/SayHello", false, "", "", "10S"));
+        JsonNode root = JSON.readTree(json);
+
+        assertEquals("10S", root.get("grpcTimeout").asText());
+    }
+
     private static byte[] gzip(byte[] bytes) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (GZIPOutputStream gzip = new GZIPOutputStream(out)) {

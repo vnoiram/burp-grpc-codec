@@ -99,6 +99,9 @@ final class GrpcTranscoder {
         if (!headers.grpcMessage().isBlank()) {
             root.put("grpcMessage", headers.grpcMessage());
         }
+        if (!headers.grpcTimeout().isBlank()) {
+            root.put("grpcTimeout", headers.grpcTimeout());
+        }
         ArrayNode messages = root.putArray("messages");
         for (GrpcMessage message : envelope.messages) {
             ObjectNode node = messages.addObject();

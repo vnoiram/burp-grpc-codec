@@ -7,17 +7,22 @@ import burp.api.montoya.http.message.responses.HttpResponse;
 import java.util.Locale;
 import java.util.Optional;
 
-record HttpHeaders(String contentType, String grpcEncoding, String grpcPath, boolean response, String grpcStatus, String grpcMessage) {
+record HttpHeaders(String contentType, String grpcEncoding, String grpcPath, boolean response, String grpcStatus,
+                    String grpcMessage, String grpcTimeout) {
     HttpHeaders(String contentType) {
-        this(contentType, "", "", false, "", "");
+        this(contentType, "", "", false, "", "", "");
     }
 
     HttpHeaders(String contentType, String grpcEncoding) {
-        this(contentType, grpcEncoding, "", false, "", "");
+        this(contentType, grpcEncoding, "", false, "", "", "");
     }
 
     HttpHeaders(String contentType, String grpcEncoding, String grpcPath, boolean response) {
-        this(contentType, grpcEncoding, grpcPath, response, "", "");
+        this(contentType, grpcEncoding, grpcPath, response, "", "", "");
+    }
+
+    HttpHeaders(String contentType, String grpcEncoding, String grpcPath, boolean response, String grpcStatus, String grpcMessage) {
+        this(contentType, grpcEncoding, grpcPath, response, grpcStatus, grpcMessage, "");
     }
 
     static HttpHeaders from(HttpRequest request) {
@@ -46,8 +51,12 @@ record HttpHeaders(String contentType, String grpcEncoding, String grpcPath, boo
                 .filter(header -> header.name().equalsIgnoreCase("grpc-message"))
                 .map(header -> header.value())
                 .findFirst();
+        Optional<String> grpcTimeout = message.headers().stream()
+                .filter(header -> header.name().equalsIgnoreCase("grpc-timeout"))
+                .map(header -> header.value())
+                .findFirst();
         return new HttpHeaders(contentType.orElse(""), grpcEncoding.orElse(""), grpcPath, response,
-                grpcStatus.orElse(""), grpcMessage.orElse(""));
+                grpcStatus.orElse(""), grpcMessage.orElse(""), grpcTimeout.orElse(""));
     }
 
     boolean isGrpc() {
