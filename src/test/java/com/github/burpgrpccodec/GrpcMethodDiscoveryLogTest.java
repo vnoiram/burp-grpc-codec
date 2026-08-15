@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GrpcMethodDiscoveryLogTest {
@@ -62,5 +63,34 @@ class GrpcMethodDiscoveryLogTest {
 
         log.clear();
         assertTrue(log.entries().isEmpty());
+    }
+
+    @Test
+    void entryLineFormatRoundTripsThroughParse() {
+        // GrpcMethodDiscoveryLog persists entries as "host\tpath\tcount" lines
+        // via the Montoya PersistedObject API (not exercisable here without a
+        // running Burp instance); this pins the line format that persist()
+        // writes and load() reads back.
+        GrpcMethodDiscoveryLog.Entry original = new GrpcMethodDiscoveryLog.Entry("api.example.com", "/demo.Greeter/SayHello", 3);
+
+        GrpcMethodDiscoveryLog.Entry parsed = GrpcMethodDiscoveryLog.Entry.parse(
+                original.host() + "\t" + original.path() + "\t" + original.count());
+
+        assertEquals(original, parsed);
+        assertNull(GrpcMethodDiscoveryLog.Entry.parse("malformed-line"));
+    }
+
+    @Test
+    void rendersEntriesAsCsvWithQuotingForSpecialCharacters() {
+        GrpcMethodDiscoveryLog log = new GrpcMethodDiscoveryLog();
+
+        log.record("api.example.com", "/demo.Greeter/SayHello");
+        log.record("weird,host\"name", "/demo.Greeter/SayGoodbye");
+
+        String csv = GrpcMethodDiscoveryLog.toCsv(log.entries());
+
+        assertTrue(csv.startsWith("host,path,count\n"));
+        assertTrue(csv.contains("api.example.com,/demo.Greeter/SayHello,1\n"));
+        assertTrue(csv.contains("\"weird,host\"\"name\",/demo.Greeter/SayGoodbye,1\n"));
     }
 }
