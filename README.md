@@ -91,6 +91,21 @@ back into the original wire format when Burp sends the message.
 - Accepts per-`/pkg.Service/Method` request/response message type overrides
   in Settings, used instead of the single default request/response type when
   no loaded schema resolves that specific path.
+- Adds a `hex` field alongside the base64 `value` for decoded `bytes` fields,
+  for manual inspection without an external hex tool.
+- Flags likely-sensitive values in the decoded JSON with a best-effort `hint`
+  field: JWT-shaped strings (`hint: "jwt"`), and, when schema field names are
+  available, fields named like credentials (e.g. `password`, `api_key`,
+  `access_token`) (`hint: "possible-secret"`). Not a security scanner, just a
+  low-precision pointer to values worth a closer look.
+- Surfaces the `grpc-timeout` request header as a read-only `grpcTimeout`
+  field in the decoded JSON, alongside the existing `grpcStatus`/
+  `grpcMessage` response fields.
+- Adds a filter box to the "gRPC Schema" suite tab, to narrow the shown
+  message types and methods by name/path substring (the "Export .proto..."
+  button always exports the full schema regardless of the filter).
+- Adds an "Export JSON..." button to the "gRPC Methods" suite tab, alongside
+  the existing CSV export, for the (filtered) discovered method list.
 
 ## Build
 
@@ -184,6 +199,12 @@ Supported value types:
 When a field appears multiple times, its value becomes an array of typed field
 objects.
 
+Decoded `bytes` fields also carry a `hex` value alongside the base64 `value`.
+Decoded `string` fields (and, with schema metadata, any field) may carry a
+best-effort, decode-only `hint` (e.g. `"jwt"` for JWT-shaped strings, or
+`"possible-secret"` for schema field names like `password`/`api_key`); this
+is not written back on encode.
+
 With schema metadata, fields can also carry:
 
 - `enumName`: the symbolic name for an `enum` value (e.g. `"ACTIVE"`). Editing
@@ -211,8 +232,9 @@ instead of `f<number>` (e.g. `"greeting"` instead of `"f1"`).
 
 When present on the response, `grpc-status` / `grpc-message` HTTP headers are
 surfaced as read-only `grpcStatus` / `grpcStatusName` / `grpcMessage` fields
-at the root of the decoded JSON (not inside `messages`). These reflect the
-HTTP headers at decode time and are not written back on encode; edit the
+at the root of the decoded JSON (not inside `messages`). When present on the
+request, `grpc-timeout` is likewise surfaced as `grpcTimeout`. These reflect
+the HTTP headers at decode time and are not written back on encode; edit the
 headers directly via Burp's header editor instead.
 
 ## Limits
