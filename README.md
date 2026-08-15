@@ -81,6 +81,16 @@ back into the original wire format when Burp sends the message.
 - Persists the "gRPC Methods" discovery log across Burp restarts (per Burp
   project), so passively observed service/method paths survive reloading the
   extension or Burp itself.
+- Highlights and annotates Proxy history requests, not just responses, when
+  auto-highlight is enabled; the annotation note includes the resolved
+  `/pkg.Service/Method` path when one is known.
+- Adds a "gRPC Schema" suite tab listing every message type and service
+  method currently loaded (from .proto files, a FileDescriptorSet, or Server
+  Reflection), with "Copy to clipboard" and "Export .proto..." buttons for
+  saving a local record of a target's schema.
+- Accepts per-`/pkg.Service/Method` request/response message type overrides
+  in Settings, used instead of the single default request/response type when
+  no loaded schema resolves that specific path.
 
 ## Build
 
@@ -126,6 +136,14 @@ Open Burp's settings and search for `Burp gRPC Codec` to configure:
 - Maximum body size for the schema-less raw-detection heuristic, in bytes
   (default `1048576`, i.e. 1 MiB). Only applies to `broad`/`strict`
   raw-detection modes; declared gRPC/protobuf Content-Types are unaffected.
+- Per-method message type overrides, for paths no loaded schema resolves.
+  Format: `/pkg.Service/Method=RequestType>ResponseType`, semicolon-separated
+  for multiple paths (e.g.
+  `/demo.Greeter/SayHello=demo.HelloRequest>demo.HelloResponse`). The
+  response type may be omitted (`=RequestType` only). Ignored for paths a
+  loaded schema (.proto files, FileDescriptorSet, or Server Reflection)
+  already resolves; falls back to the single default request/response type
+  above when neither applies.
 
 ## JSON Format
 
