@@ -2,11 +2,15 @@ package com.github.burpgrpccodec;
 
 import javax.swing.JButton;
 import javax.swing.JFileChooser;
+import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
+import javax.swing.JTextField;
 import javax.swing.Timer;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.FlowLayout;
@@ -19,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Read-only, periodically-refreshed browser of the message types and service
@@ -29,12 +34,30 @@ import java.util.List;
 final class GrpcSchemaPanel {
     private final SchemaRegistry schemas;
     private final JTextArea textArea = new JTextArea();
+    private final JTextField filterField = new JTextField(24);
     private final JPanel panel = new JPanel(new BorderLayout());
 
     GrpcSchemaPanel(SchemaRegistry schemas) {
         this.schemas = schemas;
         textArea.setEditable(false);
         textArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+
+        filterField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent event) {
+                refresh();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent event) {
+                refresh();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent event) {
+                refresh();
+            }
+        });
 
         JButton refreshButton = new JButton("Refresh");
         refreshButton.addActionListener(event -> refresh());
@@ -44,6 +67,8 @@ final class GrpcSchemaPanel {
         exportButton.addActionListener(event -> exportProto());
 
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        buttons.add(new JLabel("Filter:"));
+        buttons.add(filterField);
         buttons.add(refreshButton);
         buttons.add(copyButton);
         buttons.add(exportButton);
@@ -60,10 +85,19 @@ final class GrpcSchemaPanel {
     }
 
     private void refresh() {
-        List<SchemaMessage> messages = schemas.allMessages();
-        List<SchemaMethod> methods = schemas.allMethods();
+        String filter = filterField.getText().trim().toLowerCase(Locale.ROOT);
+        List<SchemaMessage> messages = schemas.allMessages().stream()
+                .filter(message -> filter.isEmpty() || message.typeName().toLowerCase(Locale.ROOT).contains(filter))
+                .toList();
+        List<SchemaMethod> methods = schemas.allMethods().stream()
+                .filter(method -> filter.isEmpty()
+                        || method.path().toLowerCase(Locale.ROOT).contains(filter)
+                        || method.requestType().toLowerCase(Locale.ROOT).contains(filter)
+                        || method.responseType().toLowerCase(Locale.ROOT).contains(filter))
+                .toList();
         StringBuilder text = new StringBuilder();
-        text.append(messages.size()).append(" message type(s), ").append(methods.size()).append(" method(s) loaded\n\n");
+        text.append(messages.size()).append(" of ").append(schemas.messageCount()).append(" message type(s), ")
+                .append(methods.size()).append(" of ").append(schemas.methodCount()).append(" method(s) shown\n\n");
         text.append("Messages:\n");
         for (SchemaMessage message : messages) {
             text.append("  ").append(message.typeName())
@@ -88,6 +122,8 @@ final class GrpcSchemaPanel {
             return;
         }
         Path target = chooser.getSelectedFile().toPath();
+        // Exports the whole schema regardless of the on-screen filter, since a
+        // .proto file with only some referenced types would not be coherent.
         String proto = SchemaProtoExporter.export(schemas.allMessages(), schemas.allMethods());
         try {
             Files.writeString(target, proto, StandardCharsets.UTF_8);
