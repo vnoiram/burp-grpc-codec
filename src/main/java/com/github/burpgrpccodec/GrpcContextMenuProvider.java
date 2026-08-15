@@ -7,6 +7,9 @@ import burp.api.montoya.http.message.requests.HttpRequest;
 import burp.api.montoya.http.message.responses.HttpResponse;
 import burp.api.montoya.ui.contextmenu.ContextMenuEvent;
 import burp.api.montoya.ui.contextmenu.ContextMenuItemsProvider;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 
 import javax.swing.JMenuItem;
 import java.awt.Component;
@@ -18,6 +21,8 @@ import java.util.List;
 import java.util.Optional;
 
 final class GrpcContextMenuProvider implements ContextMenuItemsProvider {
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     private final MontoyaApi api;
     private final GrpcTranscoder transcoder;
 
@@ -40,7 +45,11 @@ final class GrpcContextMenuProvider implements ContextMenuItemsProvider {
         copyItem.addActionListener(actionEvent -> copyDecoded(targets));
         JMenuItem comparerItem = new JMenuItem("Send decoded gRPC/protobuf bodies to Comparer");
         comparerItem.addActionListener(actionEvent -> sendToComparer(targets));
-        return List.of(logItem, copyItem, comparerItem);
+        JMenuItem grpcurlItem = new JMenuItem("Copy as grpcurl command");
+        grpcurlItem.addActionListener(actionEvent -> copyAsGrpcurl(targets));
+        JMenuItem protoStubItem = new JMenuItem("Generate .proto stub from decoded body");
+        protoStubItem.addActionListener(actionEvent -> generateProtoStub(targets));
+        return List.of(logItem, copyItem, comparerItem, grpcurlItem, protoStubItem);
     }
 
     private void logDecoded(List<HttpRequestResponse> targets) {
@@ -85,6 +94,69 @@ final class GrpcContextMenuProvider implements ContextMenuItemsProvider {
             return;
         }
         api.comparer().sendToComparer(decodedBodies.toArray(ByteArray[]::new));
+    }
+
+    private void copyAsGrpcurl(List<HttpRequestResponse> targets) {
+        for (HttpRequestResponse requestResponse : targets) {
+            HttpRequest request = requestResponse.request();
+            if (request == null || request.httpService() == null) {
+                continue;
+            }
+            HttpHeaders headers = HttpHeaders.from(request);
+            if (!(headers.isGrpc() || headers.isGrpcWeb()) || headers.grpcPath().isBlank()) {
+                continue;
+            }
+            byte[] body = request.body().getBytes();
+            if (!transcoder.isCandidate(body, headers)) {
+                continue;
+            }
+            try {
+                JsonNode decoded = MAPPER.readTree(transcoder.decode(body, headers));
+                JsonNode message = firstMessage(decoded);
+                String hostAndPort = request.httpService().host() + ":" + request.httpService().port();
+                String command = GrpcCurlFormatter.buildCommand(
+                        hostAndPort, request.httpService().secure(), headers.grpcPath(), message);
+                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(command), null);
+                api.logging().logToOutput("gRPC Codec: copied grpcurl command to clipboard.");
+            } catch (Exception ex) {
+                api.logging().logToError("gRPC Codec: failed to build grpcurl command: " + ex.getMessage());
+            }
+            return;
+        }
+        api.logging().logToOutput("gRPC Codec: no gRPC/grpc-web request with a resolvable method path found in selection.");
+    }
+
+    private void generateProtoStub(List<HttpRequestResponse> targets) {
+        for (HttpRequestResponse requestResponse : targets) {
+            Optional<String> decodedJson = decodeRequestBody(requestResponse.request())
+                    .or(() -> decodeResponseBody(requestResponse.response(), requestResponse.request()));
+            if (decodedJson.isEmpty()) {
+                continue;
+            }
+            try {
+                JsonNode decoded = MAPPER.readTree(decodedJson.get());
+                JsonNode message = firstMessage(decoded);
+                String messageType = decoded.path("messageType").asText("");
+                String rootName = messageType.isBlank() ? "DecodedMessage" : simpleTypeName(messageType);
+                String stub = ProtoStubGenerator.generate(rootName, message);
+                Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(stub), null);
+                api.logging().logToOutput("gRPC Codec: copied generated .proto stub to clipboard.");
+            } catch (Exception ex) {
+                api.logging().logToError("gRPC Codec: failed to generate .proto stub: " + ex.getMessage());
+            }
+            return;
+        }
+        api.logging().logToOutput("gRPC Codec: no gRPC/protobuf request or response body found in selection.");
+    }
+
+    private static JsonNode firstMessage(JsonNode decoded) {
+        ArrayNode messages = decoded.withArray("messages");
+        return messages.isEmpty() ? MAPPER.createObjectNode() : messages.get(0).path("message");
+    }
+
+    private static String simpleTypeName(String fullyQualified) {
+        int lastDot = fullyQualified.lastIndexOf('.');
+        return lastDot < 0 ? fullyQualified : fullyQualified.substring(lastDot + 1);
     }
 
     private static String requestUrl(HttpRequestResponse requestResponse) {
