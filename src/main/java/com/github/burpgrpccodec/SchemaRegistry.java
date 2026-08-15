@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -20,6 +21,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 final class SchemaRegistry {
@@ -98,6 +100,20 @@ final class SchemaRegistry {
 
     int methodCount() {
         return methods.size();
+    }
+
+    /** All currently loaded message types, sorted by fully-qualified name, for schema browsing/export. */
+    List<SchemaMessage> allMessages() {
+        return messages.values().stream()
+                .sorted(Comparator.comparing(SchemaMessage::typeName))
+                .collect(Collectors.toList());
+    }
+
+    /** All currently known service methods, sorted by gRPC path, for schema browsing/export. */
+    List<SchemaMethod> allMethods() {
+        return methods.values().stream()
+                .sorted(Comparator.comparing(SchemaMethod::path))
+                .collect(Collectors.toList());
     }
 
     void reload(ExtensionSettings settings) {

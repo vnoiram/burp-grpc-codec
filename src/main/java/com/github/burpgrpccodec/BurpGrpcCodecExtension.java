@@ -20,6 +20,7 @@ public final class BurpGrpcCodecExtension implements BurpExtension {
         GrpcMethodDiscoveryLog discoveryLog = new GrpcMethodDiscoveryLog(api.persistence().extensionData());
         api.http().registerHttpHandler(new GrpcMethodDiscoveryHandler(transcoder, discoveryLog));
         api.userInterface().registerSuiteTab("gRPC Methods", new GrpcMethodDiscoveryPanel(discoveryLog).uiComponent());
+        api.userInterface().registerSuiteTab("gRPC Schema", new GrpcSchemaPanel(schemas).uiComponent());
         api.logging().logToOutput("Burp gRPC Codec loaded");
     }
 }
