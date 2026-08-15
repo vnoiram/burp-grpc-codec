@@ -331,10 +331,23 @@ final class GrpcTranscoder {
         if (settings == null) {
             return Optional.empty();
         }
+        Optional<SchemaMessage> overridden = overriddenMessage(headers);
+        if (overridden.isPresent()) {
+            return overridden;
+        }
         String type = "protobuf".equals(format) || headers.isGrpc()
                 ? settings.defaultRequestType()
                 : settings.defaultResponseType();
         return schemas.message(type);
+    }
+
+    private Optional<SchemaMessage> overriddenMessage(HttpHeaders headers) {
+        ExtensionSettings.PathTypeOverride override = settings.messageTypeOverrides().get(headers.grpcPath());
+        if (override == null) {
+            return Optional.empty();
+        }
+        String type = headers.response() ? override.responseType() : override.requestType();
+        return type.isBlank() ? Optional.empty() : schemas.message(type);
     }
 
     private static boolean hasLikelyBinaryProtobufShape(byte[] body) {

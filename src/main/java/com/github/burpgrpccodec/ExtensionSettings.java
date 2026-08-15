@@ -4,6 +4,9 @@ import burp.api.montoya.persistence.PersistedObject;
 import burp.api.montoya.ui.settings.SettingsPanelSetting;
 import burp.api.montoya.ui.settings.SettingsPanelWithData;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 import static burp.api.montoya.ui.settings.SettingsPanelBuilder.settingsPanel;
 import static burp.api.montoya.ui.settings.SettingsPanelPersistence.PROJECT_SETTINGS;
 
@@ -21,6 +24,7 @@ final class ExtensionSettings {
     private static final String AUTO_HIGHLIGHT = "Auto-highlight gRPC/protobuf traffic";
     private static final String AUTO_SELECT_TAB = "Auto-select gRPC Codec tab";
     private static final String MAX_RAW_DETECTION_BYTES = "Max raw-detection body size (bytes)";
+    private static final String MESSAGE_TYPE_OVERRIDES = "Per-method message type overrides";
 
     private final PersistedObject data;
     private final SettingsPanelWithData panel;
@@ -63,6 +67,11 @@ final class ExtensionSettings {
                 .withSetting(SettingsPanelSetting.stringSetting(MAX_RAW_DETECTION_BYTES,
                         "Skip the schema-less raw-detection heuristic (broad/strict modes) for bodies "
                                 + "larger than this many bytes. Does not affect declared gRPC/protobuf Content-Types."))
+                .withSetting(SettingsPanelSetting.stringSetting(MESSAGE_TYPE_OVERRIDES,
+                        "Message types for specific gRPC paths that have no loaded schema, used instead of "
+                                + "the default request/response type above. Format: "
+                                + "/pkg.Service/Method=RequestType>ResponseType, semicolon-separated for multiple "
+                                + "paths. Ignored for paths a loaded schema already resolves."))
                 .build();
         loadDefaults();
     }
@@ -141,6 +150,42 @@ final class ExtensionSettings {
         }
     }
 
+    Map<String, PathTypeOverride> messageTypeOverrides() {
+        return parseMessageTypeOverrides(value(MESSAGE_TYPE_OVERRIDES));
+    }
+
+    /**
+     * Parses {@link #MESSAGE_TYPE_OVERRIDES}, a semicolon-separated list of
+     * {@code /pkg.Service/Method=RequestType>ResponseType} entries. Extracted
+     * as a static, pure function so the format can be unit tested without a
+     * running Burp instance to back the settings panel/persistence.
+     */
+    static Map<String, PathTypeOverride> parseMessageTypeOverrides(String raw) {
+        Map<String, PathTypeOverride> overrides = new LinkedHashMap<>();
+        for (String entry : raw.split(";")) {
+            String trimmed = entry.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            int equals = trimmed.indexOf('=');
+            if (equals < 0) {
+                continue;
+            }
+            String path = trimmed.substring(0, equals).trim();
+            String types = trimmed.substring(equals + 1).trim();
+            if (path.isEmpty() || types.isEmpty()) {
+                continue;
+            }
+            int separator = types.indexOf('>');
+            String requestType = (separator < 0 ? types : types.substring(0, separator)).trim();
+            String responseType = separator < 0 ? "" : types.substring(separator + 1).trim();
+            if (!requestType.isEmpty()) {
+                overrides.put(path, new PathTypeOverride(requestType, responseType));
+            }
+        }
+        return overrides;
+    }
+
     long maxRawDetectionBytes() {
         try {
             long bytes = Long.parseLong(value(MAX_RAW_DETECTION_BYTES));
@@ -164,6 +209,7 @@ final class ExtensionSettings {
         data.setBoolean(AUTO_HIGHLIGHT, autoHighlight());
         data.setBoolean(AUTO_SELECT_TAB, autoSelectTab());
         data.setString(MAX_RAW_DETECTION_BYTES, value(MAX_RAW_DETECTION_BYTES));
+        data.setString(MESSAGE_TYPE_OVERRIDES, value(MESSAGE_TYPE_OVERRIDES));
     }
 
     private void loadDefaults() {
@@ -176,6 +222,7 @@ final class ExtensionSettings {
         setDefault(JSON_OUTPUT, "pretty");
         setDefault(MAX_DEPTH, "24");
         setDefault(MAX_RAW_DETECTION_BYTES, "1048576");
+        setDefault(MESSAGE_TYPE_OVERRIDES, "");
         Boolean tls = data.getBoolean(REFLECTION_TLS);
         if (tls == null) {
             data.setBoolean(REFLECTION_TLS, false);
@@ -206,6 +253,9 @@ final class ExtensionSettings {
             value = data.getString(key);
         }
         return value == null ? "" : value.trim();
+    }
+
+    record PathTypeOverride(String requestType, String responseType) {
     }
 
     enum RawDetection {
