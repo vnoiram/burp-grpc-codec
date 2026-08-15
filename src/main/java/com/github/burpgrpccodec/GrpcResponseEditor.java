@@ -13,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 
 final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
     private final RawEditor editor;
+    private final EncodeStatusBar statusBar;
     private final MontoyaApi api;
     private final GrpcTranscoder transcoder;
     private HttpRequestResponse current;
@@ -23,6 +24,7 @@ final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
         this.transcoder = transcoder;
         this.editor = api.userInterface().createRawEditor();
         this.editor.setEditable(true);
+        this.statusBar = new EncodeStatusBar(editor.uiComponent());
     }
 
     @Override
@@ -33,12 +35,14 @@ final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
         try {
             byte[] edited = editor.getContents().getBytes();
             byte[] body = transcoder.encode(edited, HttpHeaders.from(current.response(), current.request()));
+            statusBar.clear();
             if (transcoder.verboseLogging()) {
                 api.logging().logToOutput("gRPC Codec: encoded edited response body (" + body.length + " bytes)");
             }
             return current.response().withBody(ByteArray.byteArray(body));
         } catch (RuntimeException ex) {
             api.logging().logToError("gRPC Codec response encode error: " + ex.getMessage());
+            statusBar.showError(ex.getMessage());
             return current.response();
         }
     }
@@ -47,6 +51,7 @@ final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
     public void setRequestResponse(HttpRequestResponse requestResponse) {
         this.current = requestResponse;
         this.decoded = false;
+        statusBar.clear();
         if (requestResponse == null || requestResponse.response() == null) {
             editor.setContents(ByteArray.byteArray(new byte[0]));
             editor.setEditable(false);
@@ -92,7 +97,7 @@ final class GrpcResponseEditor implements ExtensionProvidedHttpResponseEditor {
 
     @Override
     public Component uiComponent() {
-        return editor.uiComponent();
+        return statusBar.uiComponent();
     }
 
     @Override
