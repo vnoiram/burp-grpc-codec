@@ -1,5 +1,7 @@
 package com.github.burpgrpccodec;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -92,5 +94,20 @@ class GrpcMethodDiscoveryLogTest {
         assertTrue(csv.startsWith("host,path,count\n"));
         assertTrue(csv.contains("api.example.com,/demo.Greeter/SayHello,1\n"));
         assertTrue(csv.contains("\"weird,host\"\"name\",/demo.Greeter/SayGoodbye,1\n"));
+    }
+
+    @Test
+    void rendersEntriesAsJsonArray() throws Exception {
+        GrpcMethodDiscoveryLog log = new GrpcMethodDiscoveryLog();
+        log.record("api.example.com", "/demo.Greeter/SayHello");
+        log.record("api.example.com", "/demo.Greeter/SayHello");
+
+        String json = GrpcMethodDiscoveryLog.toJson(log.entries());
+        JsonNode array = new ObjectMapper().readTree(json);
+
+        assertEquals(1, array.size());
+        assertEquals("api.example.com", array.get(0).get("host").asText());
+        assertEquals("/demo.Greeter/SayHello", array.get(0).get("path").asText());
+        assertEquals(2, array.get(0).get("count").asInt());
     }
 }

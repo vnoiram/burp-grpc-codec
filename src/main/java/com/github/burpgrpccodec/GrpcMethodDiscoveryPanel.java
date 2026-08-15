@@ -59,6 +59,8 @@ final class GrpcMethodDiscoveryPanel {
         copyButton.addActionListener(event -> copyToClipboard());
         JButton exportButton = new JButton("Export CSV...");
         exportButton.addActionListener(event -> exportCsv());
+        JButton exportJsonButton = new JButton("Export JSON...");
+        exportJsonButton.addActionListener(event -> exportJson());
         JButton clearButton = new JButton("Clear");
         clearButton.addActionListener(event -> {
             log.clear();
@@ -71,6 +73,7 @@ final class GrpcMethodDiscoveryPanel {
         buttons.add(refreshButton);
         buttons.add(copyButton);
         buttons.add(exportButton);
+        buttons.add(exportJsonButton);
         buttons.add(clearButton);
 
         panel.add(buttons, BorderLayout.NORTH);
@@ -112,17 +115,24 @@ final class GrpcMethodDiscoveryPanel {
     }
 
     private void exportCsv() {
+        exportTo("grpc-methods.csv", GrpcMethodDiscoveryLog.toCsv(filteredEntries()), "CSV");
+    }
+
+    private void exportJson() {
+        exportTo("grpc-methods.json", GrpcMethodDiscoveryLog.toJson(filteredEntries()), "JSON");
+    }
+
+    private void exportTo(String defaultFileName, String content, String formatLabel) {
         JFileChooser chooser = new JFileChooser();
-        chooser.setSelectedFile(new java.io.File("grpc-methods.csv"));
+        chooser.setSelectedFile(new java.io.File(defaultFileName));
         if (chooser.showSaveDialog(panel) != JFileChooser.APPROVE_OPTION) {
             return;
         }
         Path target = chooser.getSelectedFile().toPath();
-        String csv = GrpcMethodDiscoveryLog.toCsv(filteredEntries());
         try {
-            Files.writeString(target, csv, StandardCharsets.UTF_8);
+            Files.writeString(target, content, StandardCharsets.UTF_8);
         } catch (IOException ex) {
-            javax.swing.JOptionPane.showMessageDialog(panel, "Failed to write CSV: " + ex.getMessage(),
+            javax.swing.JOptionPane.showMessageDialog(panel, "Failed to write " + formatLabel + ": " + ex.getMessage(),
                     "Export failed", javax.swing.JOptionPane.ERROR_MESSAGE);
         }
     }

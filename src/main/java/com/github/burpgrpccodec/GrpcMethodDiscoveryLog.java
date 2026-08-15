@@ -2,6 +2,11 @@ package com.github.burpgrpccodec;
 
 import burp.api.montoya.persistence.PersistedList;
 import burp.api.montoya.persistence.PersistedObject;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.Comparator;
 import java.util.List;
@@ -16,6 +21,7 @@ import java.util.stream.Collectors;
  */
 final class GrpcMethodDiscoveryLog {
     private static final String PERSISTENCE_KEY = "discoveredGrpcMethods";
+    private static final ObjectMapper JSON = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
     private final Map<String, Entry> entriesByKey = new ConcurrentHashMap<>();
     private final PersistedObject persistence;
 
@@ -84,6 +90,22 @@ final class GrpcMethodDiscoveryLog {
                     .append(entry.count()).append('\n');
         }
         return csv.toString();
+    }
+
+    /** Renders the given entries as a JSON array of {@code {host, path, count}} objects. */
+    static String toJson(List<Entry> entries) {
+        ArrayNode array = JSON.createArrayNode();
+        for (Entry entry : entries) {
+            ObjectNode node = array.addObject();
+            node.put("host", entry.host());
+            node.put("path", entry.path());
+            node.put("count", entry.count());
+        }
+        try {
+            return JSON.writeValueAsString(array);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException(ex);
+        }
     }
 
     private static String csvField(String value) {
