@@ -10,9 +10,12 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -55,7 +58,7 @@ class ProtobufCodecTest {
 
     @Test
     void flagsJwtShapedStringsWithAHint() {
-        String jwt = "REDACTED_TEST_JWT";
+        String jwt = makeJwt();
         byte[] protobuf = wrapMessage(jwt.getBytes(StandardCharsets.UTF_8));
 
         ObjectNode decoded = new ProtobufCodec().decodeMessage(protobuf);
@@ -402,6 +405,27 @@ class ProtobufCodecTest {
         assertDoesNotThrow(() -> new ProtobufCodec(registry).decodeMessage(level2, schema));
         assertThrows(IllegalArgumentException.class,
                 () -> new ProtobufCodec(registry, 1).decodeMessage(level2, schema));
+    }
+
+    /**
+     * Builds a JWT-shaped string at runtime so no static token literal lives in
+     * the source tree (which would trip secret scanners like gitleaks). The
+     * signature is a real HMAC-SHA256 over the header/payload, so the result has
+     * genuine JWT structure without hardcoding one.
+     */
+    private static String makeJwt() {
+        Base64.Encoder b64 = Base64.getUrlEncoder().withoutPadding();
+        String header = b64.encodeToString("{\"alg\":\"HS256\"}".getBytes(StandardCharsets.UTF_8));
+        String payload = b64.encodeToString("{\"sub\":\"1234567890\"}".getBytes(StandardCharsets.UTF_8));
+        String signingInput = header + "." + payload;
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec("test-only-key".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            String signature = b64.encodeToString(mac.doFinal(signingInput.getBytes(StandardCharsets.UTF_8)));
+            return signingInput + "." + signature;
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static byte[] wrapMessage(byte[] inner) {
